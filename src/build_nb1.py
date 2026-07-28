@@ -125,10 +125,12 @@ profile_s = spark.createDataFrame(
         T.StructField("gender", T.StringType()), T.StructField("credit_card_limit", T.DoubleType()),
         T.StructField("registered_on", T.StringType())]))
 # cache: os DFs vêm de coleções locais (LocalRelation); sem cache, cada join
-# re-embute e recomputa os dados no plano — custo de memória desnecessário.
-tx_s = tx_s.repartition(8).cache()
-offers_s = offers_s.cache()
-profile_s = profile_s.cache()
+# re-embute e recomputa os dados no plano. Só em modo local — persist/cache
+# não é suportado no compute serverless do Databricks.
+if not IS_DATABRICKS:
+    tx_s = tx_s.repartition(8).cache()
+    offers_s = offers_s.cache()
+    profile_s = profile_s.cache()
 print("tx:", tx_s.count(), "| offers:", offers_s.count(), "| profile:", profile_s.count())""")
 
 md("## Limpeza — perfil e ofertas")
@@ -184,8 +186,9 @@ grid = (grid.join(inst.withColumnRenamed("t_recv", "wave"), ["account_id", "wave
             .fillna({"n_active_offers": 0})
             .withColumn("W", F.col("offer_id").isNotNull().cast("int"))
             .withColumn("control_clean",
-                        ((F.col("W") == 0) & (F.col("n_active_offers") == 0)).cast("int"))
-            .cache())
+                        ((F.col("W") == 0) & (F.col("n_active_offers") == 0)).cast("int")))
+if not IS_DATABRICKS:
+    grid = grid.cache()   # persist não é suportado no serverless
 print("grade:", grid.count())
 grid.groupBy("wave").agg(F.sum("W").alias("tratados"),
                          F.sum(F.when(F.col("W") == 0, 1).otherwise(0)).alias("nao_recebeu"),

@@ -35,26 +35,51 @@ tratados podem ter ofertas anteriores ativas (56% de sobreposição) → ATE tam
 reportado no recorte "tratado limpo" (sem oferta ativa no envio).
 """)
 
-md("## Setup e carga")
+md("""## Setup e carga (dual-mode)
+Roda local (parquet de `data/processed/`) ou no Databricks (tabelas salvas pelo
+NB1: `ifood_modeling_table` / `ifood_offers` — **rode o NB1 antes no mesmo
+workspace**). A célula `%pip` instala o xgboost no serverless (no-op local).""")
+co("""%pip install -q xgboost""")
 co("""import os, sys, warnings
-sys.path.append(os.path.abspath('..'))
 warnings.filterwarnings('ignore')
 import numpy as np, pandas as pd
 import matplotlib.pyplot as plt
 from xgboost import XGBClassifier, XGBRegressor
 from sklearn.metrics import roc_auc_score, average_precision_score
 from sklearn.calibration import calibration_curve
-from src.uplift_metrics import qini_curve
 rng = np.random.RandomState(42)
 plt.rcParams['figure.dpi'] = 110
 IFOOD_RED = '#EA1D2C'
-FIG = os.path.abspath(os.path.join('..', 'presentation', 'figures'))
-os.makedirs(FIG, exist_ok=True)
 
-df = pd.read_parquet('../data/processed/modeling_table.parquet')
-offers = pd.read_parquet('../data/processed/offers.parquet')
-print(df.shape)
+IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
+if IS_DATABRICKS:
+    FIG = '/tmp/figures'
+    df = spark.table('ifood_modeling_table').toPandas()
+    offers = spark.table('ifood_offers').toPandas()
+else:
+    FIG = os.path.abspath(os.path.join('..', 'presentation', 'figures'))
+    df = pd.read_parquet('../data/processed/modeling_table.parquet')
+    offers = pd.read_parquet('../data/processed/offers.parquet')
+os.makedirs(FIG, exist_ok=True)
+print("Ambiente:", "Databricks" if IS_DATABRICKS else "local", "|", df.shape)
 df.groupby('W').size()""")
+
+md("### Métrica de avaliação — curva Qini (embutida, sem dependência de `src/`)")
+co('''def qini_curve(y_true, treatment, uplift):
+    """Pontos (x, y) da curva Qini: ganho incremental acumulado ao contatar a
+    população ranqueada pelo score (funciona para desfecho binário ou contínuo)."""
+    d = pd.DataFrame({"y": np.asarray(y_true), "w": np.asarray(treatment),
+                      "s": np.asarray(uplift)})
+    d = d.sort_values("s", ascending=False, kind="mergesort").reset_index(drop=True)
+    cum_y_t = (d.y * d.w).cumsum()
+    cum_y_c = (d.y * (1 - d.w)).cumsum()
+    cum_n_t = d.w.cumsum()
+    cum_n_c = (1 - d.w).cumsum()
+    ratio = np.where(cum_n_c == 0, 0, cum_n_t / np.where(cum_n_c == 0, 1, cum_n_c))
+    qini = cum_y_t - cum_y_c * ratio
+    n = len(d)
+    x = np.arange(1, n + 1) / n
+    return np.concatenate([[0], x]), np.concatenate([[0], qini.values])''')
 
 md("""## A · Split temporal
 Treino = ondas 0–14; teste = 17–24. O corte no dia 17 preserva ~metade das linhas

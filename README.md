@@ -70,12 +70,16 @@ python -m nbconvert --to notebook --execute --inplace notebooks/2_modeling.ipynb
 ```
 
 ### Databricks (Community/Free Edition)
-O `1_data_processing.ipynb` é **dual-mode**: importe o repo como **Git folder**
-(ou o `.ipynb` via Import) e rode com **Run all** — ele detecta o ambiente,
-**baixa os dados da URL pública do S3 automaticamente** e persiste como tabelas
-(`ifood_modeling_table`). Compatível com compute serverless (sem `sparkContext`,
-sem `cache()`, escrita via `saveAsTable`). Os notebooks 0 e 2 são locais
-(pandas/sklearn) e leem o parquet gerado pelo NB1.
+Os notebooks 1 e 2 são **dual-mode**: importe o repo como **Git folder** (ou os
+`.ipynb` via Import) e rode com **Run all**, na ordem:
+1. `1_data_processing.ipynb` — detecta o ambiente, **baixa os dados da URL
+   pública do S3 automaticamente** e persiste como tabelas
+   (`ifood_modeling_table`, `ifood_offers`). Compatível com serverless (sem
+   `sparkContext`, sem `cache()`, escrita via `saveAsTable`);
+2. `2_modeling.ipynb` — instala o xgboost via `%pip` (1ª célula) e lê as tabelas
+   salvas pelo NB1 **no mesmo workspace**.
+
+O notebook 0 (EDA) é local e lê os JSONs de `data/raw/`.
 
 ---
 

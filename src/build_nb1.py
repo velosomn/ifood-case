@@ -331,21 +331,23 @@ co("""bal = (modeling.filter("wave = 17 and (W = 1 or control_clean = 1)")
 bal.orderBy("W").show()""")
 
 md("""## Persistência
-Local: parquet em `data/processed/` (consumido pelo NB2). No Databricks a tabela
-fica em `/tmp` (o NB2 roda localmente a partir do repo).""")
-co("""out_dir = ROOT / "data" / "processed"
-try:
+Local: parquet em `data/processed/` (consumido pelo NB2). No Databricks:
+tabelas gerenciadas no Unity Catalog (`saveAsTable` executa no cluster —
+`toPandas()` de um plano grande esbarra em limitação de serialização do
+Spark Connect no serverless).""")
+co("""if IS_DATABRICKS:
+    modeling.write.mode("overwrite").saveAsTable("ifood_modeling_table")
+    offers_c.write.mode("overwrite").saveAsTable("ifood_offers")
+    print("salvo como tabelas: ifood_modeling_table / ifood_offers (catálogo padrão)")
+    print("linhas:", spark.table("ifood_modeling_table").count())
+else:
+    out_dir = ROOT / "data" / "processed"
     out_dir.mkdir(parents=True, exist_ok=True)
-    test = out_dir / ".write_test"; test.touch(); test.unlink()
-except Exception:
-    out_dir = Path(tempfile.gettempdir()) / "ifood_processed"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-modeling_pd = modeling.toPandas()
-modeling_pd.to_parquet(out_dir / "modeling_table.parquet", index=False)
-offers_c.toPandas().to_parquet(out_dir / "offers.parquet", index=False)
-print("salvo em", out_dir)
-print(modeling_pd.shape)""")
+    modeling_pd = modeling.toPandas()
+    modeling_pd.to_parquet(out_dir / "modeling_table.parquet", index=False)
+    offers_c.toPandas().to_parquet(out_dir / "offers.parquet", index=False)
+    print("salvo em", out_dir)
+    print(modeling_pd.shape)""")
 
 md("""## Resumo
 - **Saída:** `modeling_table.parquet` — 102.000 linhas (cliente × onda): ~76,3k

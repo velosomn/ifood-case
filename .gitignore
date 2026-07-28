@@ -1,0 +1,21 @@
+# Dados brutos (baixados via README — muito grandes p/ versionar)
+data/raw/*.json
+data/raw/*.tar.gz
+
+# Dados processados (regenerados pelo notebook 1)
+data/processed/*
+!data/processed/.gitkeep
+
+# Prompt de trabalho local (não faz parte da entrega)
+CLAUDE.md
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

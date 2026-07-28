@@ -1,0 +1,23 @@
+# Core
+pyspark>=3.5
+pandas>=2.0
+numpy>=1.26
+pyarrow>=14.0
+
+# Modeling
+scikit-learn>=1.3
+xgboost>=2.0
+
+# Viz / notebooks
+matplotlib>=3.7
+seaborn>=0.13
+jupyter
+nbformat
+nbconvert
+ipykernel
+
+# Presentation (optional, para gerar o .pptx)
+python-pptx>=0.6
+
+# NOTE: PySpark requires a Java runtime (JDK 8/11/17). Recomendado:
+#   conda install -c conda-forge openjdk=17

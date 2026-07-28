@@ -1,4 +1,9 @@
-"""Builds notebooks/1_data_processing.ipynb (PySpark pipeline)."""
+"""Builds notebooks/1_data_processing.ipynb — PySpark, dual-mode (local + Databricks).
+
+Desenho: unidade (cliente x onda); tratamento W = envio; controle limpo por onda;
+target resposta = viu & usou (ordem t_view <= t_comp); outcome contínuo = gasto na
+janela; features estritamente pré-onda.
+"""
 import nbformat as nbf
 from pathlib import Path
 
@@ -7,228 +12,346 @@ c = []
 md = lambda s: c.append(nbf.v4.new_markdown_cell(s))
 co = lambda s: c.append(nbf.v4.new_code_cell(s))
 
-md("""# 1 · Processamento de Dados — iFood Offer Optimization (PySpark)
+md("""# 1 · Processamento de Dados — dataset unificado (PySpark)
 
-**Objetivo do notebook:** transformar os três arquivos brutos (`offers`, `profile`,
-`transactions`) em uma **tabela unificada de modelagem**, onde cada linha é uma
-*oferta enviada a um cliente* com o tratamento e o desfecho necessários para
-**uplift modeling**.
+**Objetivo:** transformar os 3 arquivos brutos em uma **tabela de modelagem (cliente × onda)**
+que sustenta tanto o modelo de resposta quanto a leitura causal do envio.
 
-## Enquadramento do problema
-A pergunta de negócio — *"qual oferta enviar para cada cliente?"* — é causal: só
-vale a pena enviar uma oferta se ela **muda o comportamento** do cliente. Por isso
-não modelamos apenas *quem completa* a oferta, e sim o **efeito incremental** de
-expor o cliente à oferta.
+## Desenho (decisões e alternativas descartadas)
 
-Como o dataset não tem um grupo de controle "sem oferta", usamos um **experimento
-quase-natural** já presente nos dados: nem todo cliente que **recebe** a oferta
-efetivamente a **visualiza** (não abriu o canal). Definimos então:
+| Decisão | Justificativa | Alternativa descartada |
+|---|---|---|
+| **Unidade = (cliente × onda)** | Os envios ocorrem em 6 ondas (dias 0,7,14,17,21,24) e cada cliente recebe **no máx. 1 oferta por onda** (verificado adiante). A linha fica não-ambígua: tratado (com atributos da oferta) ou controle. | (cliente × oferta recebida): sem linhas de controle não se estima efeito do envio; 56% das janelas se sobrepõem, atribuição ambígua. |
+| **Tratamento W = envio na onda** | É a alavanca que o negócio controla. ~25% da base não recebe nada em cada onda e o *balance check* (adiante) sugere aleatorização → controle utilizável. | W = visualizou: é **pós-tratamento** (mediador); condicionar nele embute viés de seleção. |
+| **Controle limpo** = não recebeu na onda **e** sem janela anterior ativa | Cliente sem oferta vigente é contrafactual do "não enviar". | Usar todos os não-recebedores: contaminados por ofertas anteriores ainda ativas. |
+| **Target resposta `y_response` = viu E usou** (`t_view ≤ t_comp`, na validade) | "Usar" = `offer completed` (resgate). Sem exigir visualização **anterior**, 16,3% das instâncias seriam falsos sucessos (auto-resgate: 9,4% sem ver + 6,9% viu depois). Informational: viu E transacionou após ver. | `completed` puro: contamina o target com compras que ocorreriam de qualquer forma. |
+| **Outcome contínuo = gasto em horizontes fixos** (3/4/5/7/10d) | Permite contraste tratado × controle com **janelas do mesmo tamanho** (controle não tem `duration`). | Gasto na janela da oferta apenas: sem equivalente no controle. |
+| **Features estritamente pré-onda** (`t < dia da onda`) | Fecha vazamento temporal. Onda 0 fica sem histórico → flag `has_history`. | Agregados do período todo: vazam o próprio desfecho. |
+| **Split temporal** (treino ondas 0–14, teste 17–24; aplicado no NB2) | Simula decisão real: treinar no passado, decidir no futuro. | Split aleatório: vaza o futuro e superestima performance. |
 
-- **Tratamento (`W`) = a oferta foi *visualizada* dentro da validade** (1) vs
-  recebida mas não visualizada (0).
-- **Desfecho (`Y`)**:
-  - `bogo` / `discount` → a oferta foi **completada** dentro da validade;
-  - `informational` (não tem "completar") → o cliente fez **alguma transação**
-    dentro da validade.
-
-O **uplift** de uma oferta para um cliente é `P(Y|W=1) − P(Y|W=0)`.
-
-## Premissas (documentadas para o avaliador)
-1. `age == 118` é um *placeholder* de idade ausente (coincide 100% com `gender` e
-   `credit_card_limit` nulos) → tratado como perfil incompleto.
-2. Janela de validade de uma oferta = `[t_recebida, t_recebida + duration]` (dias).
-3. Visualização/conclusão são atribuídas a uma oferta recebida se ocorrem na
-   janela e são do **mesmo `offer_id`**.
-4. `time_since_test_start` está em **dias** (0–29.75; passos de 0.25 = 6 h).
-5. Features comportamentais do cliente são agregadas sobre todo o período de teste;
-   em produção seriam calculadas em uma janela estritamente anterior à oferta
-   (registrado como limitação para evitar vazamento).
-6. Se o mesmo `offer_id` é recebido mais de uma vez com janelas sobrepostas, um
-   evento pode ser atribuído a mais de uma instância (double-count aceito).
+## Premissas
+1. `age == 118` é sentinela de perfil incompleto (coincide 100% com nulos de `gender`/`credit_card_limit`).
+2. Janela de validade = `[t_recv, t_recv + duration]` dias; `time_since_test_start` em dias (0–29.75).
+3. `offer completed` = cupom usado (resgate ao atingir `min_value` na validade).
+4. Envio nas ondas ≈ aleatorizado (suportado pelo balance check; validação definitiva = A/B).
 """)
 
-md("## Setup")
-co("""import os, sys
-sys.path.append(os.path.abspath('..'))  # tornar 'src' importável a partir de notebooks/
+md("""## Setup (dual-mode: local ou Databricks)
+O notebook roda **sem alterações** em ambiente local ou no Databricks (Free Edition/
+Community): detecta o ambiente, obtém a sessão Spark via `getOrCreate` e, se os
+arquivos brutos não existirem no disco, **baixa o tar.gz da URL pública do S3**.""")
+co("""import os, sys, glob, tarfile, tempfile, urllib.request
+from pathlib import Path
+import pandas as pd
+import numpy as np
+from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import types as T
 
-from pyspark.sql import functions as F, Window
-from src.config import (get_spark, OFFERS_JSON, PROFILE_JSON, TRANSACTIONS_JSON,
-                        CUSTOMERS_PARQUET, OFFERS_PARQUET, MODELING_TABLE_PARQUET,
-                        DATA_PROCESSED)
+IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
 
-spark = get_spark("ifood-1-data-processing")
-DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
-print("Spark", spark.version)""")
+if IS_DATABRICKS:
+    spark = SparkSession.builder.getOrCreate()   # sessão provida pela plataforma
+else:
+    # Windows/local: aponta os workers Python do Spark para o interpretador atual
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+    # heap do driver precisa ser definido ANTES da JVM subir (config no builder é ignorada)
+    os.environ.setdefault("PYSPARK_SUBMIT_ARGS", "--driver-memory 4g pyspark-shell")
+    spark = (SparkSession.builder.master("local[*]").appName("ifood-nb1")
+             .config("spark.sql.shuffle.partitions", "8")
+             .config("spark.ui.enabled", "false").getOrCreate())
+spark.sparkContext.setLogLevel("ERROR")
 
-md("## 1. Ofertas (`offers.json`)\nMetadados das 10 ofertas. Explodimos a lista de canais em flags booleanas.")
-co("""offers_raw = spark.read.json(str(OFFERS_JSON), multiLine=True)
-offers_raw.show(truncate=False)
+CWD = Path(os.getcwd())
+ROOT = CWD.parent if CWD.name == "notebooks" else CWD
+DATA_URL = "https://data-architect-test-source.s3.sa-east-1.amazonaws.com/ds-technical-evaluation-data.tar.gz"
+print("Ambiente:", "Databricks" if IS_DATABRICKS else "local", "| Spark", spark.version)""")
 
-CHANNELS = ["web", "email", "mobile", "social"]
-offers = offers_raw
+co("""def ensure_raw_data():
+    \"\"\"Retorna dir com offers/profile/transactions.json; baixa do S3 se preciso.\"\"\"
+    raw = ROOT / "data" / "raw"
+    if (raw / "transactions.json").exists():
+        return raw
+    tmp = Path(tempfile.gettempdir()) / "ifood_raw"
+    if not (tmp / "transactions.json").exists():
+        tmp.mkdir(parents=True, exist_ok=True)
+        tgz = tmp / "data.tar.gz"
+        print("Baixando dados de", DATA_URL)
+        urllib.request.urlretrieve(DATA_URL, tgz)
+        with tarfile.open(tgz) as t:
+            t.extractall(tmp)
+        for f in glob.glob(str(tmp / "**" / "*.json"), recursive=True):
+            Path(f).replace(tmp / Path(f).name)
+    return tmp
+
+RAW = ensure_raw_data()
+print("Dados em:", RAW)""")
+
+md("""## Ingestão
+Parse do campo aninhado `value` (`offer id` com espaço em received/viewed,
+`offer_id` em completed, `amount` em transações) feito em pandas — caminho de
+ingestão único que funciona igual local e no serverless do Databricks — e conversão
+para Spark **com schema explícito**. Todo o processamento pesado é PySpark.""")
+co("""offers_pd = pd.read_json(RAW / "offers.json")
+profile_pd = pd.read_json(RAW / "profile.json")
+tx_pd = pd.read_json(RAW / "transactions.json")
+
+tx_pd["offer_id"] = tx_pd["value"].apply(lambda d: d.get("offer id") or d.get("offer_id"))
+tx_pd["amount"] = pd.to_numeric(tx_pd["value"].apply(lambda d: d.get("amount")))
+tx_pd["reward"] = pd.to_numeric(tx_pd["value"].apply(lambda d: d.get("reward")))
+tx_flat = tx_pd[["account_id", "event", "offer_id", "amount", "reward",
+                 "time_since_test_start"]].rename(columns={"time_since_test_start": "t"})
+offers_pd["channels_str"] = offers_pd["channels"].apply(",".join)
+profile_pd["registered_on"] = profile_pd["registered_on"].astype(str)
+
+def none_ify(df):
+    return df.astype(object).where(df.notna(), None)
+
+tx_s = spark.createDataFrame(none_ify(tx_flat), schema=T.StructType([
+    T.StructField("account_id", T.StringType()), T.StructField("event", T.StringType()),
+    T.StructField("offer_id", T.StringType()), T.StructField("amount", T.DoubleType()),
+    T.StructField("reward", T.DoubleType()), T.StructField("t", T.DoubleType())]))
+offers_s = spark.createDataFrame(
+    none_ify(offers_pd[["id", "offer_type", "min_value", "discount_value", "duration", "channels_str"]]),
+    schema=T.StructType([
+        T.StructField("offer_id", T.StringType()), T.StructField("offer_type", T.StringType()),
+        T.StructField("min_value", T.DoubleType()), T.StructField("discount_value", T.DoubleType()),
+        T.StructField("duration", T.DoubleType()), T.StructField("channels_str", T.StringType())]))
+profile_s = spark.createDataFrame(
+    none_ify(profile_pd[["id", "age", "gender", "credit_card_limit", "registered_on"]]),
+    schema=T.StructType([
+        T.StructField("account_id", T.StringType()), T.StructField("age", T.DoubleType()),
+        T.StructField("gender", T.StringType()), T.StructField("credit_card_limit", T.DoubleType()),
+        T.StructField("registered_on", T.StringType())]))
+# cache: os DFs vêm de coleções locais (LocalRelation); sem cache, cada join
+# re-embute e recomputa os dados no plano — custo de memória desnecessário.
+tx_s = tx_s.repartition(8).cache()
+offers_s = offers_s.cache()
+profile_s = profile_s.cache()
+print("tx:", tx_s.count(), "| offers:", offers_s.count(), "| profile:", profile_s.count())""")
+
+md("## Limpeza — perfil e ofertas")
+co("""CHANNELS = ["web", "email", "mobile", "social"]
+offers_c = offers_s.withColumn("channels", F.split("channels_str", ","))
 for ch in CHANNELS:
-    offers = offers.withColumn(f"ch_{ch}", F.array_contains("channels", ch).cast("int"))
-offers = (offers
-    .withColumn("n_channels", sum(F.col(f"ch_{ch}") for ch in CHANNELS))
-    .withColumnRenamed("id", "offer_id")
-    .withColumn("duration", F.col("duration").cast("double")))
-offers.select("offer_id", "offer_type", "min_value", "discount_value",
-              "duration", "n_channels", *[f"ch_{c}" for c in CHANNELS]).show(truncate=False)""")
+    offers_c = offers_c.withColumn(f"ch_{ch}", F.array_contains("channels", ch).cast("int"))
+offers_c = offers_c.withColumn("n_channels", sum(F.col(f"ch_{c}") for c in CHANNELS)) \\
+                   .drop("channels", "channels_str")
 
-md("## 2. Perfil dos clientes (`profile.json`)\nLimpeza de idade *placeholder*, parsing da data de cadastro e criação de features estáticas.")
-co("""profile_raw = spark.read.json(str(PROFILE_JSON), multiLine=True)
-print("linhas:", profile_raw.count())
-
-# t=0 do teste como referência para calcular 'tenure' (a data absoluta é desconhecida;
-# usamos a data de cadastro mais recente do dataset como proxy de 'hoje').
-ref = profile_raw.select(F.max(F.to_date("registered_on", "yyyyMMdd")).alias("m")).first()["m"]
-
-customers = (profile_raw
-    .withColumnRenamed("id", "account_id")
+ref_date = profile_s.select(F.max(F.to_date("registered_on", "yyyyMMdd"))).first()[0]
+profile_c = (profile_s
     .withColumn("incomplete_profile", (F.col("age") == 118).cast("int"))
     .withColumn("age", F.when(F.col("age") == 118, None).otherwise(F.col("age")))
-    .withColumn("registered_dt", F.to_date("registered_on", "yyyyMMdd"))
-    .withColumn("tenure_days", F.datediff(F.lit(ref), F.col("registered_dt")))
-    .withColumn("gender", F.when(F.col("gender").isNull(), "unknown").otherwise(F.col("gender"))))
+    .withColumn("gender", F.coalesce("gender", F.lit("unknown")))
+    .withColumn("account_age_days",
+                F.datediff(F.lit(ref_date), F.to_date("registered_on", "yyyyMMdd")))
+    .drop("registered_on"))
+profile_c.show(3)""")
 
-customers.select("account_id","age","gender","credit_card_limit",
-                 "tenure_days","incomplete_profile").show(5)
-print("perfis incompletos:", customers.filter("incomplete_profile=1").count())""")
+md("""## Ondas de envio e verificação da unidade
+Confirmamos empiricamente: 6 ondas e **no máximo 1 oferta por cliente por onda** —
+o que valida a unidade (cliente × onda).""")
+co("""events = {e: tx_s.filter(F.col("event") == e).drop("event")
+          for e in ["offer received", "offer viewed", "offer completed", "transaction"]}
+rec = events["offer received"].select("account_id", "offer_id", F.col("t").alias("t_recv"))
+vie = events["offer viewed"].select("account_id", "offer_id", F.col("t").alias("t_view"))
+com = events["offer completed"].select("account_id", "offer_id", F.col("t").alias("t_comp"))
+trans = events["transaction"].select("account_id", F.col("t").alias("t_tx"), "amount")
 
-md("## 3. Transações (`transactions.json`)\nO campo `value` mistura chaves (`offer id` com espaço em received/viewed, `offer_id` com underscore em completed, `amount` em transações). Normalizamos tudo.")
-co("""tx_raw = spark.read.json(str(TRANSACTIONS_JSON), multiLine=True)
-tx_raw.printSchema()
+waves = [r[0] for r in rec.select("t_recv").distinct().orderBy("t_recv").collect()]
+print("ondas:", waves)
+dup = (rec.groupBy("account_id", "t_recv").count().filter("count > 1").count())
+assert len(waves) == 6 and dup == 0, "premissa violada"
+print("máx. 1 oferta por (cliente, onda): OK")""")
 
-tx = (tx_raw
-    .withColumn("offer_id", F.coalesce(F.col("value.`offer id`"), F.col("value.offer_id")))
-    .withColumn("amount", F.col("value.amount").cast("double"))
-    .withColumn("reward", F.col("value.reward").cast("double"))
-    .withColumnRenamed("time_since_test_start", "t")
-    .select("account_id", "event", "offer_id", "amount", "reward", "t"))
+md("""## Grade (cliente × onda) + tratamento
+17.000 clientes × 6 ondas = 102.000 linhas. `W=1` se recebeu oferta na onda.
+`n_active_offers` = janelas de ondas anteriores ainda vigentes no dia do envio —
+define o **controle limpo** (`W=0` e nenhuma oferta ativa).""")
+co("""waves_s = spark.createDataFrame([(float(w),) for w in waves], ["wave"])
+grid = profile_c.select("account_id").crossJoin(waves_s)
 
-tx.groupBy("event").count().orderBy(F.desc("count")).show()""")
+inst = (rec.join(offers_c, "offer_id")
+           .withColumn("t_end", F.col("t_recv") + F.col("duration")))
 
-md("### Separar os tipos de evento")
-co("""received  = tx.filter("event='offer received'").select("account_id","offer_id",F.col("t").alias("t_recv"))
-viewed    = tx.filter("event='offer viewed'").select("account_id","offer_id",F.col("t").alias("t_view"))
-completed = tx.filter("event='offer completed'").select("account_id","offer_id",
-                                                        F.col("t").alias("t_comp"),
-                                                        F.col("reward").alias("reward_paid"))
-transactions = tx.filter("event='transaction'").select("account_id",F.col("t").alias("t_tx"),"amount")
+active = (grid.join(inst.select("account_id", F.col("t_recv").alias("t0"), "t_end"), "account_id")
+              .filter((F.col("t0") < F.col("wave")) & (F.col("t_end") > F.col("wave")))
+              .groupBy("account_id", "wave").agg(F.count("*").alias("n_active_offers")))
 
-for name, d in [("received",received),("viewed",viewed),("completed",completed),("transactions",transactions)]:
-    print(f"{name:13s}: {d.count():>7,}")""")
+grid = (grid.join(inst.withColumnRenamed("t_recv", "wave"), ["account_id", "wave"], "left")
+            .join(active, ["account_id", "wave"], "left")
+            .fillna({"n_active_offers": 0})
+            .withColumn("W", F.col("offer_id").isNotNull().cast("int"))
+            .withColumn("control_clean",
+                        ((F.col("W") == 0) & (F.col("n_active_offers") == 0)).cast("int"))
+            .cache())
+print("grade:", grid.count())
+grid.groupBy("wave").agg(F.sum("W").alias("tratados"),
+                         F.sum(F.when(F.col("W") == 0, 1).otherwise(0)).alias("nao_recebeu"),
+                         F.sum("control_clean").alias("controle_limpo")).orderBy("wave").show()""")
 
-md("""## 4. Construção da tabela de instâncias de oferta (coração do pipeline)
-Cada **oferta recebida** vira uma instância com id único. Anexamos janela de
-validade e, por *joins* com filtro de janela, marcamos visualização, conclusão e
-gasto no período.""")
-co("""# instância única por oferta recebida
-w_inst = Window.orderBy("account_id","offer_id","t_recv")
-inst = (received
-    .join(offers.select("offer_id","offer_type","duration","min_value",
-                        "discount_value","n_channels",*[f"ch_{c}" for c in CHANNELS]),
-          "offer_id", "left")
-    .withColumn("t_end", F.col("t_recv") + F.col("duration"))
-    .withColumn("instance_id", F.row_number().over(w_inst)))
-print("instâncias de oferta:", inst.count())""")
+md("""## Atribuição na janela da oferta (tratados)
+`first_view`/`first_comp` do **mesmo offer_id** dentro de `[t_recv, t_end]`.
+O flag `view_before_comp` implementa a ordem exigida pelo target.""")
+co("""base_t = grid.filter("W = 1").select("account_id", "wave", "offer_id", "t_end", "offer_type",
+                                     "discount_value")
 
-co("""# --- Tratamento: oferta VISUALIZADA na janela ---
-viewed_flag = (inst.select("instance_id","account_id","offer_id","t_recv","t_end")
-    .join(viewed, ["account_id","offer_id"])
-    .filter((F.col("t_view") >= F.col("t_recv")) & (F.col("t_view") <= F.col("t_end")))
-    .groupBy("instance_id").agg(F.lit(1).alias("viewed")))
+fv = (base_t.join(vie, ["account_id", "offer_id"])
+            .filter((F.col("t_view") >= F.col("wave")) & (F.col("t_view") <= F.col("t_end")))
+            .groupBy("account_id", "wave").agg(F.min("t_view").alias("first_view")))
+fc = (base_t.join(com, ["account_id", "offer_id"])
+            .filter((F.col("t_comp") >= F.col("wave")) & (F.col("t_comp") <= F.col("t_end")))
+            .groupBy("account_id", "wave").agg(F.min("t_comp").alias("first_comp")))
 
-# --- Desfecho bogo/discount: oferta COMPLETADA na janela ---
-completed_flag = (inst.select("instance_id","account_id","offer_id","t_recv","t_end")
-    .join(completed, ["account_id","offer_id"])
-    .filter((F.col("t_comp") >= F.col("t_recv")) & (F.col("t_comp") <= F.col("t_end")))
-    .groupBy("instance_id").agg(F.lit(1).alias("completed"),
-                                F.max("reward_paid").alias("reward_paid")))
+attrib = (base_t.join(fv, ["account_id", "wave"], "left")
+                .join(fc, ["account_id", "wave"], "left")
+                .withColumn("viewed", F.col("first_view").isNotNull().cast("int"))
+                .withColumn("completed", F.col("first_comp").isNotNull().cast("int"))
+                .withColumn("view_before_comp",
+                            ((F.col("viewed") == 1) & (F.col("completed") == 1) &
+                             (F.col("first_view") <= F.col("first_comp"))).cast("int"))
+                .withColumn("reward_paid",
+                            F.when(F.col("completed") == 1, F.col("discount_value")).otherwise(0.0)))
 
-# --- Gasto do cliente na janela (qualquer transação) ---
-spend_win = (inst.select("instance_id","account_id","t_recv","t_end")
-    .join(transactions, "account_id")
-    .filter((F.col("t_tx") >= F.col("t_recv")) & (F.col("t_tx") <= F.col("t_end")))
-    .groupBy("instance_id").agg(F.coalesce(F.sum("amount"),F.lit(0.0)).alias("spend_window"),
-                                F.count("*").alias("n_tx_window")))
-print("ok")""")
+# informational: transação APÓS a visualização, dentro da janela
+tx_after_view = (attrib.filter("offer_type = 'informational' and viewed = 1")
+    .select("account_id", "wave", "first_view", "t_end")
+    .join(trans, "account_id")
+    .filter((F.col("t_tx") >= F.col("first_view")) & (F.col("t_tx") <= F.col("t_end")))
+    .groupBy("account_id", "wave").agg(F.count("*").alias("n_tx_after_view")))
 
-co("""instances = (inst
-    .join(viewed_flag, "instance_id", "left")
-    .join(completed_flag, "instance_id", "left")
-    .join(spend_win, "instance_id", "left")
-    .fillna({"viewed":0,"completed":0,"reward_paid":0.0,"spend_window":0.0,"n_tx_window":0}))
+attrib = attrib.join(tx_after_view, ["account_id", "wave"], "left") \\
+               .fillna({"n_tx_after_view": 0})
+attrib.groupBy("offer_type").agg(
+    F.mean("viewed").alias("view_rate"), F.mean("completed").alias("comp_rate"),
+    F.mean("view_before_comp").alias("viu_e_usou")).show()""")
 
-# Desfecho unificado Y: completado (bogo/discount) OU transacionou (informational)
-instances = instances.withColumn(
-    "Y",
-    F.when(F.col("offer_type")=="informational", (F.col("n_tx_window")>0).cast("int"))
-     .otherwise(F.col("completed")))
-instances = instances.withColumnRenamed("viewed","W")  # W = tratamento (visualizou)
+md("""## Outcomes em horizontes fixos (todas as linhas, tratado e controle)
+Gasto e nº de transações em `[onda, onda+h]` para h ∈ {3,4,5,7,10} — janelas
+idênticas para tratados e controles, viabilizando o contraste causal. Para tratados,
+também o gasto na **janela da própria oferta** `[onda, t_end]`.""")
+co("""HORIZONS = [3, 4, 5, 7, 10]
+tx_out = (grid.select("account_id", "wave", "t_end")
+              .join(trans, "account_id")
+              .filter((F.col("t_tx") >= F.col("wave")) & (F.col("t_tx") <= F.col("wave") + 10)))
+aggs = []
+for h in HORIZONS:
+    cond = F.col("t_tx") <= F.col("wave") + h
+    aggs += [F.sum(F.when(cond, F.col("amount")).otherwise(0.0)).alias(f"spend_h{h}"),
+             F.sum(F.when(cond, 1).otherwise(0)).alias(f"n_tx_h{h}")]
+aggs += [F.sum(F.when(F.col("t_tx") <= F.col("t_end"), F.col("amount")).otherwise(0.0)).alias("spend_window"),
+         F.sum(F.when(F.col("t_tx") <= F.col("t_end"), 1).otherwise(0)).alias("n_tx_window")]
+outcomes = tx_out.groupBy("account_id", "wave").agg(*aggs)
+print("linhas com alguma transação no horizonte:", outcomes.count())""")
 
-instances.select("offer_type","W","Y","completed","spend_window","reward_paid").show(5)""")
+md("""## Features estritamente pré-onda (`t < onda`)
+RFM transacional + histórico de ofertas do cliente **antes** do envio. Onda 0 não
+tem histórico → `has_history = 0` (mantida com flag; descartá-la custaria 1/6 dos
+tratados e o controle mais limpo).""")
+co("""tx_pre = (grid.select("account_id", "wave").join(trans, "account_id")
+              .filter(F.col("t_tx") < F.col("wave")))
+rfm = tx_pre.groupBy("account_id", "wave").agg(
+    F.count("*").alias("n_tx_pre"),
+    F.round(F.sum("amount"), 2).alias("spend_pre"),
+    F.round(F.avg("amount"), 2).alias("avg_ticket_pre"),
+    F.countDistinct(F.floor("t_tx")).alias("active_days_pre"),
+    (F.first("wave") - F.max("t_tx")).alias("recency_days"))
 
-md("### Sanity-check do funil (deve bater com a EDA em pandas)")
-co("""bd = instances.filter("offer_type in ('bogo','discount')")
+hist_r = (grid.select("account_id", "wave").join(rec, "account_id")
+              .filter(F.col("t_recv") < F.col("wave"))
+              .groupBy("account_id", "wave").agg(F.count("*").alias("n_received_pre")))
+hist_v = (grid.select("account_id", "wave").join(vie, "account_id")
+              .filter(F.col("t_view") < F.col("wave"))
+              .groupBy("account_id", "wave").agg(F.count("*").alias("n_viewed_pre")))
+hist_c = (grid.select("account_id", "wave").join(com, "account_id")
+              .filter(F.col("t_comp") < F.col("wave"))
+              .groupBy("account_id", "wave").agg(F.count("*").alias("n_completed_pre")))
+print("features pré-onda prontas")""")
+
+md("## Montagem da tabela de modelagem")
+co("""modeling = (grid
+    .join(attrib.select("account_id", "wave", "first_view", "first_comp", "viewed",
+                        "completed", "view_before_comp", "reward_paid", "n_tx_after_view"),
+          ["account_id", "wave"], "left")
+    .join(outcomes, ["account_id", "wave"], "left")
+    .join(rfm, ["account_id", "wave"], "left")
+    .join(hist_r, ["account_id", "wave"], "left")
+    .join(hist_v, ["account_id", "wave"], "left")
+    .join(hist_c, ["account_id", "wave"], "left")
+    .join(profile_c, "account_id", "left")
+    .fillna({"viewed": 0, "completed": 0, "view_before_comp": 0, "reward_paid": 0.0,
+             "n_tx_after_view": 0, "spend_window": 0.0, "n_tx_window": 0,
+             "n_tx_pre": 0, "spend_pre": 0.0, "avg_ticket_pre": 0.0, "active_days_pre": 0,
+             "n_received_pre": 0, "n_viewed_pre": 0, "n_completed_pre": 0,
+             **{f"spend_h{h}": 0.0 for h in HORIZONS}, **{f"n_tx_h{h}": 0 for h in HORIZONS}})
+    .withColumn("has_history", (F.col("wave") > 0).cast("int"))
+    .withColumn("view_rate_pre",
+                F.when(F.col("n_received_pre") > 0,
+                       F.col("n_viewed_pre") / F.col("n_received_pre")).otherwise(None))
+    .withColumn("comp_rate_pre",
+                F.when(F.col("n_received_pre") > 0,
+                       F.col("n_completed_pre") / F.col("n_received_pre")).otherwise(None))
+    # target resposta: viu E usou (ordem); informational: viu E transacionou após ver
+    .withColumn("y_response",
+                F.when(F.col("W") == 0, F.lit(0))
+                 .when(F.col("offer_type") == "informational",
+                       ((F.col("viewed") == 1) & (F.col("n_tx_after_view") > 0)).cast("int"))
+                 .otherwise(F.col("view_before_comp")))
+    # outcome líquido na janela da oferta (tratados)
+    .withColumn("y_net_window",
+                F.when(F.col("W") == 1, F.col("spend_window") - F.col("reward_paid"))))
+
+n_rows = modeling.count()
+print("tabela de modelagem:", n_rows, "linhas x", len(modeling.columns), "colunas")
+modeling.groupBy("W").agg(F.count("*").alias("n"), F.mean("y_response").alias("y_resp"),
+                          F.mean("spend_h7").alias("spend_h7")).show()""")
+
+md("""## Sanity checks
+1. Batem com a EDA estrutural (funil com ordem, controle limpo por onda)?
+2. **Balance check** (onda 17): tratados vs controle limpo em features pré-onda —
+   diferenças pequenas suportam a premissa de envio ~aleatório.""")
+co("""bd = modeling.filter("W = 1 and offer_type in ('bogo','discount')")
 tot = bd.count()
-print(f"bogo/discount instâncias: {tot:,}")
-print("taxa visualização :", round(bd.agg(F.mean('W')).first()[0],3))
-print("taxa conclusão    :", round(bd.agg(F.mean('completed')).first()[0],3))
-waste = bd.filter("completed=1 and W=0").count()/tot
-print("COMPLETADAS SEM VER (recompensa desperdiçada):", round(waste,3))
-up = (bd.filter('W=1').agg(F.mean('completed')).first()[0]
-      - bd.filter('W=0').agg(F.mean('completed')).first()[0])
-print("uplift naïve (viu - não viu):", round(up,3))""")
+print(f"instâncias bogo/discount: {tot:,}")
+for lbl, cond in [("viu e usou (ordem ok)", "view_before_comp = 1"),
+                  ("completou SEM ver", "completed = 1 and viewed = 0"),
+                  ("completou antes de ver", "completed = 1 and viewed = 1 and view_before_comp = 0")]:
+    v = bd.filter(cond).count()
+    print(f"  {lbl:24s}: {v:6,} ({v/tot:6.1%})")""")
+co("""bal = (modeling.filter("wave = 17 and (W = 1 or control_clean = 1)")
+    .groupBy("W").agg(F.count("*").alias("n"),
+                      F.round(F.mean("spend_pre"), 2).alias("spend_pre"),
+                      F.round(F.mean("n_tx_pre"), 2).alias("n_tx_pre"),
+                      F.round(F.mean("age"), 1).alias("age"),
+                      F.round(F.mean("incomplete_profile"), 3).alias("perfil_incompleto")))
+bal.orderBy("W").show()""")
 
-md("""## 5. Features comportamentais do cliente (RFM-like)
-Agregadas sobre todas as transações do período. *Limitação:* incluem o período das
-ofertas; em produção usaríamos janela estritamente anterior (premissa 5).""")
-co("""behav = (transactions.groupBy("account_id").agg(
-            F.count("*").alias("n_transactions"),
-            F.round(F.sum("amount"),2).alias("total_spend"),
-            F.round(F.avg("amount"),2).alias("avg_ticket"),
-            F.countDistinct(F.floor("t_tx")).alias("active_days"),
-            F.max("t_tx").alias("last_tx_day")))
-customers_full = (customers.join(behav, "account_id", "left")
-    .fillna({"n_transactions":0,"total_spend":0.0,"avg_ticket":0.0,
-             "active_days":0,"last_tx_day":0.0}))
-customers_full.select("account_id","age","gender","credit_card_limit","tenure_days",
-                      "n_transactions","total_spend","avg_ticket","active_days").show(5)""")
+md("""## Persistência
+Local: parquet em `data/processed/` (consumido pelo NB2). No Databricks a tabela
+fica em `/tmp` (o NB2 roda localmente a partir do repo).""")
+co("""out_dir = ROOT / "data" / "processed"
+try:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    test = out_dir / ".write_test"; test.touch(); test.unlink()
+except Exception:
+    out_dir = Path(tempfile.gettempdir()) / "ifood_processed"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-md("## 6. Tabela de modelagem unificada\nUma linha por instância de oferta = features do cliente + features da oferta + `W` + `Y` + economia.")
-co("""feat_cols = ["age","gender","credit_card_limit","tenure_days","incomplete_profile",
-             "n_transactions","total_spend","avg_ticket","active_days","last_tx_day"]
-offer_cols = ["offer_type","min_value","discount_value","duration","n_channels",
-              *[f"ch_{c}" for c in CHANNELS]]
-
-modeling = (instances
-    .join(customers_full.select("account_id",*feat_cols), "account_id", "left")
-    .select("instance_id","account_id","offer_id",*offer_cols,*feat_cols,
-            "W","Y","completed","spend_window","reward_paid","t_recv"))
-print("tabela de modelagem:", modeling.count(), "linhas x", len(modeling.columns), "colunas")
-modeling.show(4)""")
-
-md("""## 7. Persistência (Parquet)
-Materializamos via `pandas`/`pyarrow` (o dataset cabe em memória). Isso mantém
-todas as *transformações* em Spark e evita a dependência de `winutils.exe` que o
-gravador Hadoop do Spark exige no Windows.""")
-co("""customers_full.toPandas().to_parquet(CUSTOMERS_PARQUET, index=False)
-offers.toPandas().to_parquet(OFFERS_PARQUET, index=False)
-modeling.toPandas().to_parquet(MODELING_TABLE_PARQUET, index=False)
-print("Salvo em", DATA_PROCESSED)
-for p in [CUSTOMERS_PARQUET, OFFERS_PARQUET, MODELING_TABLE_PARQUET]:
-    print(" -", p.name)""")
+modeling_pd = modeling.toPandas()
+modeling_pd.to_parquet(out_dir / "modeling_table.parquet", index=False)
+offers_c.toPandas().to_parquet(out_dir / "offers.parquet", index=False)
+print("salvo em", out_dir)
+print(modeling_pd.shape)""")
 
 md("""## Resumo
-- **Entrada:** 10 ofertas, 17.000 clientes, ~306k eventos.
-- **Saída:** `modeling_table` (uma linha por oferta enviada) pronta para uplift,
-  com tratamento (`W` = visualizou), desfecho (`Y`) e variáveis de economia
-  (`spend_window`, `reward_paid`).
-- **Achados-chave para o negócio:** ~9% das ofertas são **completadas sem serem
-  vistas** (recompensa desperdiçada) e o uplift de *discount* supera muito o de
-  *bogo* — base para a estratégia de segmentação do notebook 2.""")
-co("""spark.stop()""")
+- **Saída:** `modeling_table.parquet` — 102.000 linhas (cliente × onda): ~76,3k
+  tratadas (`W=1`, com atributos da oferta e atribuição na janela) e ~25,7k de
+  controle (~15,6k limpas), com outcomes em horizontes fixos e features pré-onda.
+- **Targets:** `y_response` (viu E usou, com ordem) e `y_net_window` / `spend_h*`
+  (impacto contínuo).
+- **Próximo (NB2):** split temporal por onda, modelo de resposta por oferta,
+  contraste causal tratado × controle limpo e política de envio.""")
+co("""spark.stop() if not IS_DATABRICKS else None""")
 
 nb["cells"] = c
 out = Path(__file__).resolve().parents[1] / "notebooks" / "1_data_processing.ipynb"

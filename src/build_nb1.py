@@ -60,7 +60,8 @@ else:
     spark = (SparkSession.builder.master("local[*]").appName("ifood-nb1")
              .config("spark.sql.shuffle.partitions", "8")
              .config("spark.ui.enabled", "false").getOrCreate())
-spark.sparkContext.setLogLevel("ERROR")
+    # sparkContext não existe no serverless (Spark Connect) — só em modo local
+    spark.sparkContext.setLogLevel("ERROR")
 
 CWD = Path(os.getcwd())
 ROOT = CWD.parent if CWD.name == "notebooks" else CWD

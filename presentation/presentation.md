@@ -1,70 +1,60 @@
-# iFood · Otimização de Cupons — Apresentação (5 slides)
+# iFood · Direcionamento de Cupons — Apresentação (5 slides)
 
-> Versão em markdown do deck. O arquivo editável está em `ifood_case.pptx`.
-> Público: líderes de negócio (não técnicos).
-
----
-
-## Slide 1 — Enviar a oferta certa, para o cliente certo
-
-**Uplift modeling** para maximizar o retorno *incremental* dos cupons — parando de
-gastar recompensa com quem já compraria.
-
-*Base: ~306 mil eventos, 17 mil clientes, 10 tipos de oferta.*
+> Versão em markdown do deck (`ifood_case.pptx`). Público: lideranças de negócio.
 
 ---
 
-## Slide 2 — O problema: parte do orçamento de cupons é desperdiçada
+## Slide 1 — A oferta certa, para o cliente certo — e só quando ela gera venda nova
 
-![funil](figures/01_funnel.png)
+Medimos o **efeito real de cada envio** (venda incremental, descontado o cupom) e
+transformamos isso numa **política de envio por cliente**.
 
-- **1 em cada 10 cupons é completado SEM ser visto** → o cliente compraria de
-  qualquer forma; a recompensa é dinheiro jogado fora.
-- **31%** veem o cupom e não usam → mídia sem retorno.
-- **Enviar para todos não é a estratégia mais rentável.**
+*Base: 17 mil clientes · 306 mil eventos · 76 mil envios em 6 campanhas.*
 
 ---
 
-## Slide 3 — A solução: prever o efeito INCREMENTAL (uplift)
+## Slide 2 — O problema: parte do orçamento de cupons não gera venda nova
 
-![uplift por segmento](figures/02_uplift_segments.png)
+![funil](figures/10_funnel.png)
 
-Em vez de prever *quem completa*, prevemos *quanto a oferta muda o comportamento*.
-Isso separa: **persuadíveis** (enviar), **já comprariam** (não enviar → economia) e
-**não respondem** (não enviar).
-
-> **Descoberta:** cupons de **desconto** têm uplift ~4x maior que **BOGO**
-> (+29 vs +8 pontos percentuais).
+- **~30% dos cupons pagos não influenciaram a compra**: o cliente atingiu o valor
+  mínimo e o cupom foi resgatado **sem que ele tivesse visto a oferta** — a compra
+  aconteceria de qualquer forma.
+- Enviar a mesma oferta para todos ignora quem responde e quem não.
 
 ---
 
-## Slide 4 — O impacto: mais valor com menos envios
+## Slide 3 — Quanto vale um envio: R$ 9 de venda nova, já descontado o cupom
 
-![impacto](figures/04_business_impact.png)
+![efeito causal](figures/05_ate.png)
 
-Projeção por **1 milhão de cupons**:
-
-| Métrica | Ganho |
-|---|---|
-| Valor líquido incremental | **+R$ 1,45M (+21%)** vs enviar para todos |
-| Cupons enviados | **−20%** (menos custo de mídia e recompensa) |
-| Conclusões incrementais | **+13%** (ao cortar quem tem uplift negativo) |
-
-*Ticket médio/conclusão R$ 52,60; recompensa média R$ 4,90.*
+Em cada campanha, ~25% dos clientes **não receberam oferta** — um grupo de
+comparação equivalente aos demais. A diferença entre os grupos é a venda que o
+envio **causou**: **R$ 9,21 por cliente em 7 dias** (IC 8,45–9,90).
+Desconto rende mais que BOGO e que ofertas informativas.
 
 ---
 
-## Slide 5 — Como funciona e próximos passos
+## Slide 4 — A solução: uma política por cliente — a melhor oferta, ou nenhuma
 
-**Como funciona**
-1. Modelo de uplift (T-learner/XGBoost) pontua cada cliente × oferta.
-2. Recomenda a oferta de maior uplift — ou nenhuma.
-3. Só envia a quem tem retorno incremental positivo (~10% da base não deve receber).
+![validação](figures/08_policy_validation.png)
 
-*Qualidade: ranqueia o uplift ~2x melhor que a abordagem padrão (Qini-AUC).*
+Testado em campanhas **futuras** (fora do treino): o grupo apontado como
+prioritário gerou **R$ 21** de venda incremental por cliente; o de menor
+prioridade, **zero**.
 
-**Próximos passos**
-- A/B test com grupo de controle real (holdout sem oferta) para validar o uplift.
-- Otimização de timing e canal do envio.
-- Alocação sob orçamento (uplift por R$ investido).
-- Colocar o score em produção no motor de campanhas de CRM.
+> **Hoje, só 10% dos clientes recebem a sua melhor oferta.**
+
+---
+
+## Slide 5 — Impacto: de R$ 10,3M para R$ 12,3M por milhão de envios
+
+![impacto](figures/09_business_impact.png)
+
+- **+R$ 2,0M (+20%)** por 1M de envios já no cenário **conservador**, enviando 5%
+  menos cupons;
+- Potencial de ~R$ 29M com personalização total — número de modelo, a **confirmar
+  em teste controlado (A/B)**.
+
+**Próximos passos:** teste A/B com grupo de controle · alocação sob orçamento ·
+timing e canal · integração ao motor de campanhas.

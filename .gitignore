@@ -9,6 +9,7 @@ data/processed/*
 # Material de trabalho/estudo local (não faz parte da entrega)
 CLAUDE.md
 GUIA_DE_ESTUDO.md
+DISCURSO_APRESENTACAO.md
 .claude/
 
 # Python

@@ -6,8 +6,9 @@ data/raw/*.tar.gz
 data/processed/*
 !data/processed/.gitkeep
 
-# Prompt de trabalho local (não faz parte da entrega)
+# Material de trabalho/estudo local (não faz parte da entrega)
 CLAUDE.md
+GUIA_DE_ESTUDO.md
 .claude/
 
 # Python

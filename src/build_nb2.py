@@ -182,6 +182,33 @@ resid = adj['y_net_h7'] - m_adj.predict(adj[X_CUST])
 ate_adj = resid[adj.W == 1].mean() - resid[adj.W == 0].mean()
 print(f"ATE ajustado por regressão: R$ {ate_adj:.2f} (dif. de médias: R$ {ate_pool:.2f})")""")
 
+md("""### Robustez — bootstrap clusterizado por cliente
+O mesmo cliente aparece em até 6 ondas (e pode estar tratado numa onda e controle
+noutra); o bootstrap linha-a-linha assume independência que não existe. Aqui o
+reamostramos **por cliente** (mantendo todas as suas linhas), que é o IC correto
+sob correlação intra-cliente.""")
+co("""def cluster_ci(t_df, c_df, n=2000, seed=0):
+    pool = pd.concat([t_df.assign(_g=1), c_df.assign(_g=0)])
+    agg = (pool.groupby(['account_id', '_g'])['y_net_h7'].agg(['sum', 'count'])
+               .unstack('_g', fill_value=0))
+    s0, n0 = agg[('sum', 0)].values, agg[('count', 0)].values
+    s1, n1 = agg[('sum', 1)].values, agg[('count', 1)].values
+    M = len(agg)
+    r = np.random.RandomState(seed)
+    diffs = np.empty(n)
+    for i in range(n):
+        idx = r.randint(0, M, M)
+        diffs[i] = s1[idx].sum() / max(n1[idx].sum(), 1) - s0[idx].sum() / max(n0[idx].sum(), 1)
+    return np.percentile(diffs, [2.5, 97.5])
+
+lo_r, hi_r = boot_ci(pool_t['y_net_h7'].values, pool_c['y_net_h7'].values)
+lo_cl, hi_cl = cluster_ci(pool_t, pool_c)
+print(f"ATE pooled R$ {ate_pool:.2f} | IC linha-a-linha [{lo_r:.2f}, {hi_r:.2f}] "
+      f"| IC clusterizado por cliente [{lo_cl:.2f}, {hi_cl:.2f}]")
+for t in ['bogo', 'discount', 'informational']:
+    lo_t, hi_t = cluster_ci(pool_t[pool_t.offer_type == t], pool_c, seed=1)
+    print(f"  {t:13s}: IC clusterizado [{lo_t:.2f}, {hi_t:.2f}]")""")
+
 md("""## C · Modelo de resposta — `P(viu & usou | enviei, cliente, oferta)`
 Treinado nos **tratados** das ondas 0–14; avaliado nas ondas 17–24 (fora do tempo).
 XGBoost com features de cliente + atributos da oferta.""")
@@ -290,6 +317,43 @@ print(policy[policy.send].best_offer.map(
         lambda r: f"{r.offer_type} min={r.min_value:.0f} desc={r.discount_value:.0f} dur={r.duration:.0f}", axis=1)
 ).value_counts().head().to_string())""")
 
+md("""### Robustez — política sob restrição de diversidade
+A política irrestrita concentra os envios em poucas ofertas. Riscos não modelados
+(saturação, canibalização, portfólio) pedem diversificação — impomos um **teto de
+participação por oferta** e realocamos (greedy: cada cliente recebe a melhor oferta
+com capacidade disponível; nenhuma se CATE ≤ 0). Métrica: fração do valor
+*model-based* da política irrestrita que sobrevive ao teto (comparação relativa —
+não depende do nível absoluto do CATE).""")
+co("""S_mat = S.values
+order_cust = np.argsort(-S_mat.max(axis=1))
+
+def greedy_policy(cap_share):
+    cap = int(np.ceil(cap_share * len(S_mat)))
+    used = np.zeros(S_mat.shape[1], dtype=int)
+    total, sends = 0.0, 0
+    for ci in order_cust:
+        for oi in np.argsort(-S_mat[ci]):
+            v = S_mat[ci, oi]
+            if v <= 0:
+                break
+            if used[oi] < cap:
+                used[oi] += 1; total += v; sends += 1
+                break
+    return total, sends, used
+
+base_total, _, _ = greedy_policy(1.0)
+rows = []
+for cap in [1.0, 0.5, 0.4, 0.3, 0.2, 0.1]:
+    tot, snd, used = greedy_policy(cap)
+    rows.append({'teto_por_oferta': f'{cap:.0%}', 'envios': snd,
+                 'valor_preservado': tot / base_total,
+                 'share_maior_oferta': used.max() / max(snd, 1)})
+divers = pd.DataFrame(rows)
+print(divers.round(3).to_string(index=False))
+v20 = divers.loc[divers.teto_por_oferta == '20%', 'valor_preservado'].iloc[0]
+print(f"\\n→ forçando nenhuma oferta a passar de 20% dos envios, "
+      f"a política preserva {v20:.0%} do valor irrestrito")""")
+
 md("### Validação model-free: uplift realizado por faixa do score da política")
 co("""# junta score da política às linhas de teste (tratados de qualquer tipo + controle limpo)
 te = df[(df.split == 'test') & ((df.W == 1) | (df.control_clean == 1))].copy()
@@ -342,6 +406,37 @@ ate_mix = pool_t['y_net_h7'].mean() - pool_c['y_net_h7'].mean()          # mix a
 ate_disc = by_type.loc[by_type.tipo == 'discount', 'ate_liq_7d'].iloc[0]  # melhor tipo
 gain_floor = ate_disc / ate_mix - 1
 print(f"ganho de realocação (model-free, piso — mix→discount): {gain_floor:+.1%}")""")
+
+md("""### Robustez do piso — o ganho mix→discount vale em toda a base?
+O piso compara ATEs médios; se a vantagem do discount vier só dos clientes de alto
+gasto, realocar o mix não geraria o mesmo valor no restante da base. Recalculamos
+**dentro de quintis de gasto pré-onda** (tratado limpo × controle limpo do mesmo
+quintil). Reportamos a diferença em R$ (primária — a razão explode quando o ATE do
+quintil é pequeno).""")
+co("""pool_all = pd.concat([pool_t.assign(_g=1), pool_c.assign(_g=0)]).reset_index(drop=True)
+# célula 0 = sem histórico de gasto (inclui onda 0); 1-4 = quartis do gasto positivo.
+# (qcut por rank separaria os empates em 0 por ordem de concatenação — viés de célula)
+pool_all['cell'] = 0
+pos_m = pool_all.spend_pre > 0
+pool_all.loc[pos_m, 'cell'] = pd.qcut(pool_all.loc[pos_m, 'spend_pre'], 4, labels=False) + 1
+LBL = {0: 'sem histórico', 1: 'Q1 (baixo)', 2: 'Q2', 3: 'Q3', 4: 'Q4 (alto)'}
+rows = []
+for q, g in pool_all.groupby('cell'):
+    ctl = g[g._g == 0]['y_net_h7']
+    t_all = g[g._g == 1]['y_net_h7']
+    t_disc = g[(g._g == 1) & (g.offer_type == 'discount')]['y_net_h7']
+    a_mix = t_all.mean() - ctl.mean()
+    a_disc = t_disc.mean() - ctl.mean()
+    rows.append({'celula_gasto_pre': LBL[int(q)], 'n_t': len(t_all),
+                 'n_t_disc': len(t_disc), 'n_c': len(ctl),
+                 'ate_mix': a_mix, 'ate_discount': a_disc,
+                 'ganho_R$': a_disc - a_mix})
+sens = pd.DataFrame(rows)
+print(sens.round(2).to_string(index=False))
+ok = sens.dropna(subset=['ganho_R$'])
+w_gain = np.average(ok['ganho_R$'], weights=ok['n_t'])
+print(f"\\n→ ganho positivo em {(ok['ganho_R$'] > 0).sum()}/{len(ok)} células | "
+      f"média ponderada: R$ {w_gain:.2f}/cliente (pooled: R$ {ate_disc - ate_mix:.2f})")""")
 
 md("""### Simulação financeira (projeção por 1 milhão de envios)
 Três cenários: **enviar a todos** (mix atual, realizado model-free nas ondas de

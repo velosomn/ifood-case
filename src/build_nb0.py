@@ -222,6 +222,38 @@ declara quantos ficaram de fora — os mesmos 12,8% do gênero. As três pistas
 juntas (idade 118 + gênero nulo + limite nulo) confirmam que é o mesmo grupo de
 perfis incompletos.""")
 
+md("""### Idade por gênero
+Densidades sobrepostas para comparar o **formato** das distribuições (não só a
+média). O grupo `unknown` não entra aqui por construção: gênero nulo ≡ `age==118`,
+ou seja, esse grupo não tem **nem** gênero **nem** idade válida para plotar.""")
+co("""age_ok = profile[profile.age != 118]
+cores = {'M': '#4C72B0', 'F': IFOOD_RED, 'O': '#2E7D32'}
+
+fig, ax = plt.subplots(figsize=(8, 4.2))
+for g in ['M', 'F', 'O']:
+    s = age_ok.loc[age_ok.gender == g, 'age']
+    sns.kdeplot(s, ax=ax, fill=True, alpha=.30, lw=1.8,
+                color=cores[g], label=f'{g} (n={len(s):,})')
+ax.set_xlabel('idade'); ax.set_ylabel('densidade')
+ax.set_title('Distribuição de idade por gênero')
+ax.legend()
+plt.tight_layout(); plt.show()
+
+print(age_ok.groupby('gender').age.agg(['count','mean','median','std']).round(1).to_string())
+print('\\n% dentro de cada gênero por faixa etária:')
+faixa = pd.cut(age_ok.age, [17,30,45,60,75,110], labels=['18-30','31-45','46-60','61-75','75+'])
+print((pd.crosstab(age_ok.gender, faixa, normalize='index')*100).round(1).to_string())""")
+md("""**Leitura:** as duas curvas principais têm o **mesmo pico** (~55–58 anos), mas
+formatos diferentes na cauda jovem: os homens têm um **ombro visível entre 20 e 40
+anos** que praticamente não existe nas mulheres — 14,3% dos homens estão na faixa
+18–30, contra 7,8% das mulheres. O efeito líquido é uma diferença de **~5 anos na
+média** (F 57,5 vs M 52,1) e de 5 anos na mediana (58 vs 53). O grupo `O` (n=212)
+fica entre os dois, mas com amostra pequena demais para leitura conclusiva.
+
+Isso conversa com o achado de limite de crédito: as mulheres da base são **mais
+velhas e com limite maior** — consistente com renda acumulada ao longo da vida, e
+não com dois efeitos independentes.""")
+
 md("""### Idade da conta (`account_age`)
 Feature de perfil = **há quanto tempo o cliente tem conta** (tempo desde
 `registered_on`). Como a data absoluta do teste não é dada, usamos como referência o

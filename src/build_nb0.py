@@ -600,9 +600,24 @@ atingir o valor no curso normal das compras, sem nunca abrir a oferta.
 Esse é o desperdício que a estratégia precisa atacar — e a razão pela qual medir
 apenas "quem completa" enviesaria a decisão de envio.""")
 
-md("""# Alvo exploratório em nível de cliente + variáveis
-Construímos uma tabela **cliente** apenas com agregações brutas (sem janela) para
-explorar o poder discriminante das variáveis. Alvo = *completou ao menos uma oferta*.""")
+md("""# Caracterização descritiva dos segmentos de cliente
+
+⚠️ **Escopo desta seção — e o que ela deliberadamente NÃO faz.**
+Aqui apenas *descrevemos* como os clientes se distribuem. **Nada nesta seção é
+causal**, e não usamos "completou oferta" como alvo de decisão. O motivo está
+demonstrado logo abaixo: **completar uma oferta é, em boa medida, uma consequência
+mecânica de gastar** — quem gasta muito cruza o valor mínimo de qualquer forma, com
+ou sem influência do cupom.
+
+Como o objetivo do negócio é **monetário e incremental** (vender mais *por causa*
+da oferta), o eixo de interesse aqui é o **gasto**; e a pergunta causal — quanto do
+gasto o envio realmente *causou* — só pode ser respondida com o grupo de controle
+identificado no `1_data_processing.ipynb` e medido no `2_modeling.ipynb`.""")
+
+md("""## Por que não usar "completou oferta" como alvo
+Teste direto: a taxa de conclusão por quintil de gasto. Se o alvo fosse informativo
+sobre *resposta à oferta*, não deveria ser determinado quase inteiramente pelo
+volume de compra.""")
 co("""trans = tx[tx.event=='transaction']
 behav = trans.groupby('account_id').agg(
             n_transactions=('amount','size'),
@@ -622,67 +637,126 @@ cust = cust.merge(behav, on='account_id', how='left').merge(comp_cnt, on='accoun
 cust[['n_transactions','total_spend','avg_ticket','n_completed']] = \\
     cust[['n_transactions','total_spend','avg_ticket','n_completed']].fillna(0)
 cust['completou_alguma'] = (cust.n_completed>0).astype(int)
-print('clientes:', len(cust), '| taxa alvo (completou alguma):', round(cust.completou_alguma.mean(),3))
+
+# conclusões "às cegas": completou sem ter visto antes (usa a atribuição já feita)
+cegas = bd.groupby('account_id').apply(
+    lambda g: (g.first_comp.notna() & (g.first_view.isna() | (g.first_view > g.first_comp))).sum(),
+    include_groups=False).rename('n_cegas')
+cust = cust.merge(cegas, on='account_id', how='left')
+cust['n_cegas'] = cust.n_cegas.fillna(0)
+print('clientes:', len(cust), '| taxa "completou alguma":', round(cust.completou_alguma.mean(),3))
 cust.head()""")
 
-md("### Gênero e perfil incompleto vs alvo")
-co("""_ = plot_bad_cbk(cust, 'gender', 'completou_alguma', 'total_spend', teto=1.0)
-_ = plot_bad_cbk(cust, 'incomplete_profile', 'completou_alguma', 'total_spend', teto=1.0)""")
-md("**Leitura:** perfis incompletos convertem bem menos (menos histórico/engajamento). "
-   "Diferenças por gênero existem, mas são secundárias frente ao comportamento.")
+co("""cust['q_gasto'] = pd.qcut(cust.total_spend.rank(method='first'), 5,
+                          labels=['Q1 (baixo)','Q2','Q3','Q4','Q5 (alto)'])
+taut = cust.groupby('q_gasto', observed=True).agg(
+    gasto_medio=('total_spend','mean'),
+    taxa_completou=('completou_alguma','mean'),
+    conclusoes_cegas_por_cliente=('n_cegas','mean'))
+print(taut.round(2).to_string())
+print(f"\\ncorrelação gasto × completou_alguma : {cust.total_spend.corr(cust.completou_alguma):.3f}")
+print(f"correlação gasto × conclusões CEGAS: {cust.total_spend.corr(cust.n_cegas):.3f}")
 
-md("### Idade e limite de crédito vs alvo (binning por quantis)")
-co("""cust_age = quantiliza_com_missing(cust, 'age', 'age_q', 5)
-_ = plot_bad_cbk(cust_age, 'age_q', 'completou_alguma', 'total_spend', teto=1.0)
-cust_lim = quantiliza_com_missing(cust, 'credit_card_limit', 'lim_q', 5)
-_ = plot_bad_cbk(cust_lim, 'lim_q', 'completou_alguma', 'total_spend', teto=1.0)""")
-md("**Leitura:** idade e limite de crédito são **monotonicamente crescentes** com a "
-   "taxa de conclusão — clientes mais velhos e de maior limite completam mais ofertas. "
-   "(Bucket -1 = missing.)")
+fig, ax = plt.subplots(1, 2, figsize=(12, 3.6))
+ax[0].bar(taut.index.astype(str), taut.taxa_completou*100, color=IFOOD_RED)
+for i, v in enumerate(taut.taxa_completou*100): ax[0].text(i, v, f'{v:.0f}%', ha='center', va='bottom')
+ax[0].set_ylabel('% que completou alguma oferta'); ax[0].set_title('Alvo ingênuo é determinado pelo gasto')
+ax[0].tick_params(rotation=0)
+ax[1].bar(taut.index.astype(str), taut.conclusoes_cegas_por_cliente, color='#C62828')
+ax[1].set_ylabel('conclusões às cegas por cliente')
+ax[1].set_title('Quem gasta mais resgata mais SEM ver a oferta'); ax[1].tick_params(rotation=0)
+plt.tight_layout(); plt.show()""")
+md("""**Leitura — a armadilha do alvo ingênuo.** A taxa de conclusão salta de **15%**
+no quintil de menor gasto para **100%** no de maior. Isso não é poder preditivo, é
+**aritmética**: quem gasta ~R$283 em 30 dias cruza um mínimo de R$10–20 em algum
+momento, tenha visto a oferta ou não.
 
-md("### Idade da conta (`account_age`) vs alvo")
-co("""cust_ac = quantiliza_com_missing(cust, 'account_age_years', 'ac_q', 5)
-_ = plot_bad_cbk(cust_ac, 'ac_q', 'completou_alguma', 'total_spend', teto=1.0)
-print(cust_ac.groupby('ac_q')['account_age_years'].agg(['min','max']).round(2).to_string())""")
-md("**Leitura:** a idade da conta é um **forte sinal positivo**: a taxa de conclusão "
-   "sobe de ~56% (contas novas, <0,5 ano) para ~90% (contas de 1,4–2,4 anos), com leve "
-   "queda no grupo mais antigo. Clientes com **relacionamento mais consolidado** "
-   "completam muito mais ofertas — boa feature de perfil.")
+O segundo gráfico fecha o argumento: as **conclusões às cegas crescem junto com o
+gasto** (0,04 → 1,09 por cliente). Ou seja, os clientes que mais "completam ofertas"
+são também os que mais resgatam cupom **sem que a oferta tenha influenciado nada** —
+exatamente os *sure things* que não deveriam receber desconto.
 
-md("### Comportamento (RFM) vs alvo")
-co("""cust_sp = quantiliza_com_missing(cust[cust.total_spend>0], 'total_spend', 'sp_q', 5)
-_ = plot_bad_cbk(cust_sp, 'sp_q', 'completou_alguma', 'total_spend', teto=1.0)
-cust_tk = quantiliza_com_missing(cust[cust.avg_ticket>0], 'avg_ticket', 'tk_q', 5)
-_ = plot_bad_cbk(cust_tk, 'tk_q', 'completou_alguma', 'total_spend', teto=1.0)""")
-md("**Leitura:** gasto total e ticket médio discriminam fortemente a conclusão — "
-   "clientes mais ativos completam mais ofertas. Ressalva importante: uma taxa de "
-   "conclusão alta não implica que a oferta *causou* a compra (parte desses clientes "
-   "já compraria de qualquer forma).")
+**Conclusão metodológica:** otimizar "quem completa" selecionaria os maiores
+gastadores, pagando recompensa por vendas que já aconteceriam. Por isso o alvo de
+decisão do case é o **efeito incremental do envio sobre o gasto**, medido contra
+grupo de controle (NB1/NB2) — e as análises abaixo são apenas descritivas.""")
+
+md("""## Perfil dos segmentos por **gasto** (descritivo)
+Trocamos o eixo de interesse: em vez de "quem completa oferta", olhamos **quanto
+cada segmento gasta** — a variável alinhada ao objetivo monetário. Continua
+descritivo: mostra *quem são* os clientes de maior valor, não em quem o cupom
+funciona (isso exige contrafactual).""")
+co("""def perfil_por_gasto(df, var, bins=5, label=None):
+    d = df.copy()
+    if d[var].dtype.kind in 'if' and d[var].nunique() > bins:
+        d = quantiliza_com_missing(d, var, var + '_b', bins)
+        key = var + '_b'
+    else:
+        key = var
+        d[key] = d[key].fillna('Missing').astype(str)
+    g = d.groupby(key, observed=True).agg(
+        n=('total_spend','size'), gasto_medio=('total_spend','mean'),
+        ticket_medio=('avg_ticket','mean'), n_transacoes=('n_transactions','mean'))
+    fig, ax = plt.subplots(figsize=(7, 3))
+    ax.bar(g.index.astype(str), g.gasto_medio, color='#4C72B0')
+    ax.set_ylabel('gasto médio no período (R$)'); ax.set_title(label or f'Gasto médio por {var}')
+    ax.tick_params(axis='x', rotation=0)
+    for i, v in enumerate(g.gasto_medio): ax.text(i, v, f'{v:.0f}', ha='center', va='bottom', fontsize=8)
+    plt.tight_layout(); plt.show()
+    return g.round(2)
+
+display(perfil_por_gasto(cust, 'gender', label='Gasto médio por gênero'))
+display(perfil_por_gasto(cust, 'incomplete_profile', label='Gasto médio: perfil completo vs incompleto'))""")
+md("**Leitura:** perfis incompletos gastam consistentemente menos — são clientes "
+   "menos engajados com a plataforma, não apenas com o cadastro. Diferenças por "
+   "gênero no gasto são pequenas frente às comportamentais.")
+
+md("### Idade, limite de crédito e idade da conta vs gasto")
+co("""display(perfil_por_gasto(cust, 'age', label='Gasto médio por quintil de idade'))
+display(perfil_por_gasto(cust, 'credit_card_limit', label='Gasto médio por quintil de limite'))
+display(perfil_por_gasto(cust, 'account_age_years', label='Gasto médio por quintil de idade da conta'))""")
+md("""**Leitura:** limite de crédito e idade crescem com o gasto — coerente com o
+perfil socioeconômico já descrito (público maduro, renda estável). A idade da conta
+também acompanha, sugerindo que o **relacionamento consolidado** vem junto com maior
+volume de compra. *(Bucket -1 = valor ausente.)*
+
+Nada disso indica em quem o cupom **funciona** — apenas quem já vale mais hoje.""")
 
 md("# Correlações entre variáveis numéricas (nível cliente)")
 co("""num_cols = ['age','credit_card_limit','account_age_years','n_transactions',
-            'total_spend','avg_ticket','n_completed','completou_alguma']
+            'total_spend','avg_ticket','n_completed','n_cegas']
 high = print_correlation_matrix(cust, num_cols, corr_max=0.75)""")
-md("**Leitura:** as variáveis de volume/gasto são correlacionadas entre si "
-   "(candidatas a redução na feature selection). Nenhuma variável de perfil sozinha "
-   "domina o alvo — o sinal vem da combinação perfil + comportamento.")
+md("""**Leitura:** as variáveis de volume/gasto são fortemente correlacionadas entre
+si — candidatas a redução na feature selection. Note também a correlação de
+`n_completed` e `n_cegas` com `total_spend`: mais uma evidência de que "completar
+oferta" mede, em grande parte, o próprio volume de compra.""")
 
 md("""# Conclusões da EDA (dados brutos)
 1. **Qualidade:** `age==118` = perfil incompleto (~12,8%) ≡ nulos de gênero/limite →
-   flag + imputação no processing.
+   flag + imputação no processing. Sem concentração temporal: é falha estrutural de
+   cadastro, não lote/migração pontual.
 2. **Ofertas:** 4 BOGO, 4 discount, 2 informational; duração 3–10 dias define a
    **janela de atribuição** do processing; `informational` não tem "completar".
-3. **Funil:** ~75% de visualização e ~44% de conclusão (agregado); há indícios de
-   **conclusão sem visualização** (recompensa desperdiçada) → precisa ser quantificado
-   com precisão via janela temporal no processing.
-4. **Sinais preditivos:** idade, limite de crédito e RFM (gasto/ticket/transações)
-   crescem com a conclusão → boas features; volume/gasto são correlacionados
-   (candidatos a redução na feature selection).
-5. **Timing:** envios de oferta são **em lote** em 6 dias (0,7,14,17,21,24), com
-   cadência que **acelera** (de semanal para cada 3–4 dias); cada envio gera uma onda
-   decrescente de visualização/conclusão — relevante para timing de campanha.
+   Economia distinta: BOGO paga ~1x o gasto destravado, discount ~4x.
+3. **Recompensa desperdiçada (achado central):** das 33.631 conclusões de
+   bogo/discount, só **70,4%** ocorreram após o cliente ver a oferta. **29,6%** dos
+   cupons foram pagos sem influenciar a compra (17,0% nunca vistos + 12,5% vistos só
+   depois do resgate). Discount desperdiça mais que BOGO (11,3% vs 7,5% das enviadas).
+4. **O alvo ingênuo não serve para decidir envio:** "completou oferta" é
+   mecanicamente determinado pelo gasto (15% de conclusão no menor quintil → **100%**
+   no maior), e as conclusões às cegas *crescem* com o gasto. Otimizar isso
+   selecionaria os maiores gastadores, pagando por vendas que já aconteceriam →
+   **o alvo tem que ser o efeito incremental do envio**, exigindo grupo de controle.
+5. **Descritivo (não causal):** limite de crédito, idade e idade da conta acompanham
+   o gasto — caracterizam quem já vale mais hoje, não em quem o cupom funciona.
+   Variáveis de volume/gasto são correlacionadas entre si (feature selection).
+6. **Timing:** envios são **em lote** em 6 dias (0,7,14,17,21,24), com cadência que
+   **acelera** (de semanal para cada 3–4 dias); cada envio gera uma onda decrescente
+   de visualização/conclusão — relevante para timing de campanha.
 
-→ Próximo passo: `1_data_processing.ipynb` (atribuição por janela + dataset unificado).
+→ Próximo passo: `1_data_processing.ipynb` — a cadência em lote do item 6 é o que
+torna possível identificar um **grupo de controle** (quem não recebeu em cada onda),
+permitindo finalmente medir o efeito causal exigido pelo item 4.
 """)
 
 nb["cells"] = c

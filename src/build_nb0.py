@@ -1,4 +1,4 @@
-"""Builds notebooks/0_eda.ipynb — EDA sobre DADOS BRUTOS (estilo case MELI)."""
+"""Builds notebooks/0_eda.ipynb — EDA sobre DADOS BRUTOS."""
 import nbformat as nbf
 from pathlib import Path
 
@@ -15,8 +15,7 @@ agregações simples (contagens, distribuições, `groupby`); a **atribuição p
 temporal** (ligar recebeu→viu→completou dentro da validade) é *processing* e está no
 notebook `1_data_processing.ipynb`.
 
-Estrutura e utilitários seguem a metodologia do meu case anterior (MELI):
-Overview (período, missings, tipos, cardinalidades, metadados, target) →
+Estrutura: Overview (período, missings, tipos, cardinalidades, metadados, target) →
 exploração variável a variável (volumetria × taxa × valor × estabilidade temporal) →
 correlações → conclusões que orientam as próximas etapas.
 
@@ -39,10 +38,10 @@ IFOOD_RED = '#EA1D2C'
 from src.config import OFFERS_JSON, PROFILE_JSON, TRANSACTIONS_JSON""")
 
 md("""## Funções úteis
-Utilitários no estilo do case MELI (adaptados). `plot_bad_cbk` mostra, por
-categoria: **quantidade** (barras) e **taxa do evento** (linha), além de **valor
-financeiro** e **taxa ponderada por valor**. `quantiliza_com_missing` faz binning
-por quantis tratando missing. `plot_stacked_bar` avalia estabilidade temporal.""")
+`plot_bad_cbk` mostra, por categoria: **quantidade** (barras) e **taxa do evento**
+(linha), além de **valor financeiro** e **taxa ponderada por valor**.
+`quantiliza_com_missing` faz binning por quantis tratando missing.
+`plot_stacked_bar` avalia estabilidade temporal.""")
 co('''def quantiliza_com_missing(df, var, var_nova, quantil):
     """Binning por quantis; valores nulos vão para o bucket -1."""
     df1 = df.loc[~df[var].isnull()].copy()
@@ -56,7 +55,7 @@ co('''def quantiliza_com_missing(df, var, var_nova, quantil):
 def plot_bad_cbk(dataframe, var, resposta, tpv, ascending=0, x_size=13, y_size=4,
                  piso=0, teto=1.0):
     """Volumetria + taxa do evento e valor + taxa ponderada por valor, por categoria.
-    (estilo case MELI, adaptado: resposta=alvo binário, tpv=valor financeiro)."""
+    resposta = alvo binário; tpv = valor financeiro."""
     d = dataframe[[var, resposta, tpv]].copy()
     d['valor_evento'] = np.where(d[resposta] == 1, d[tpv], 0.0)
     d[var] = d[var].fillna('Missing')
@@ -97,7 +96,7 @@ def plot_stacked_bar(df, variable, target_variable, normalize=True):
 
 
 def print_correlation_matrix(df, cols, corr_max=0.75):
-    """Heatmap de correlação + lista de variáveis com |corr| alta (estilo case MELI)."""
+    """Heatmap de correlação + lista de variáveis com |corr| alta."""
     corr = df[cols].corr()
     upper = corr.abs().where(np.triu(np.ones(corr.shape), k=1).astype(bool))
     high = [col for col in upper.columns if any(upper[col] >= corr_max)]

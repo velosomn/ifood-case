@@ -512,14 +512,93 @@ hipótese central do case: **parte das conclusões ocorre sem visualização**
 (recompensa desperdiçada) — quantificado com precisão, via janela temporal, no
 notebook 1.""")
 
-md("""### Aproximação da recompensa desperdiçada (sem janela)
-*Exploratório:* conclusões cujo `offer_id` **nunca foi visto** pelo mesmo cliente.
-Não usa validade temporal (por isso aproximado); a versão exata está no notebook 1.""")
-co("""viewed_pairs = set(map(tuple, tx.loc[tx.event=='offer viewed', ['account_id','offer_id']].dropna().values))
-comp = tx.loc[tx.event=='offer completed', ['account_id','offer_id']].dropna()
-comp['visto'] = [ (a,o) in viewed_pairs for a,o in comp.values ]
-print(f'conclusões: {len(comp):,}')
-print(f'conclusões SEM o cliente ter visto a oferta (aprox.): {(~comp.visto).mean():.1%}')""")
+md("""## Recompensa desperdiçada: completou depois de ver, ou sem nunca ter visto?
+Recorte em **bogo e discount** (informational não tem evento de conclusão). Aqui
+usamos a **janela de validade** (`[t_recv, t_recv + duration]`) para ligar cada
+oferta recebida às suas visualizações e conclusões, e a **ordem** entre elas.
+
+A distinção é o coração do case: `offer completed` dispara quando o cliente atinge o
+gasto mínimo na validade — **mesmo que nunca tenha visto a oferta**. Nesse caso o
+desconto sai do caixa sem ter influenciado a compra.""")
+co("""dur_map = offers.set_index('id')['duration'].to_dict()
+typ_map = offers.set_index('id')['offer_type'].to_dict()
+
+rec = (tx[tx.event == 'offer received'][['account_id','offer_id','time_since_test_start']]
+       .rename(columns={'time_since_test_start':'t_recv'}).reset_index(drop=True))
+rec['rid'] = rec.index
+rec['otype'] = rec.offer_id.map(typ_map)
+rec['t_end'] = rec.t_recv + rec.offer_id.map(dur_map)
+vie = (tx[tx.event == 'offer viewed'][['account_id','offer_id','time_since_test_start']]
+       .rename(columns={'time_since_test_start':'t_view'}))
+com = (tx[tx.event == 'offer completed'][['account_id','offer_id','time_since_test_start']]
+       .rename(columns={'time_since_test_start':'t_comp'}))
+
+# primeira visualização / conclusão de cada oferta recebida, dentro da validade
+mv = rec.merge(vie, on=['account_id','offer_id'])
+mv = mv[(mv.t_view >= mv.t_recv) & (mv.t_view <= mv.t_end)]
+mc = rec.merge(com, on=['account_id','offer_id'])
+mc = mc[(mc.t_comp >= mc.t_recv) & (mc.t_comp <= mc.t_end)]
+rec['first_view'] = rec.rid.map(mv.groupby('rid').t_view.min())
+rec['first_comp'] = rec.rid.map(mc.groupby('rid').t_comp.min())
+
+bd = rec[rec.otype.isin(['bogo','discount'])].copy()
+bd['completou'] = bd.first_comp.notna()
+bd['viu'] = bd.first_view.notna()
+bd['apos_ver']   = bd.viu & bd.completou & (bd.first_view <= bd.first_comp)
+bd['viu_depois'] = bd.viu & bd.completou & (bd.first_view >  bd.first_comp)
+bd['sem_ver']    = bd.completou & ~bd.viu
+
+n, nc = len(bd), bd.completou.sum()
+print(f'ofertas bogo/discount recebidas: {n:,} | completadas: {nc:,} ({nc/n:.1%})\\n')
+for lbl, col in [('completadas APÓS visualizar', 'apos_ver'),
+                 ('completadas SEM visualizar', 'sem_ver'),
+                 ('completadas e vistas SÓ DEPOIS', 'viu_depois')]:
+    v = bd[col].sum()
+    print(f'{lbl:32s}: {v:6,} ({v/n:5.1%} das recebidas | {v/nc:5.1%} das completadas)')""")
+
+md("### Quebra por tipo de oferta")
+co("""linhas = []
+for t in ['bogo','discount']:
+    s = bd[bd.otype == t]
+    linhas.append({'tipo': t, 'recebidas': len(s), 'completadas': s.completou.sum(),
+                   'taxa_conclusao': s.completou.mean(),
+                   'apos_ver': s.apos_ver.sum(), 'sem_ver': s.sem_ver.sum(),
+                   'viu_depois': s.viu_depois.sum(),
+                   '%_sem_ver_das_compl': s.sem_ver.sum()/s.completou.sum()})
+tab = pd.DataFrame(linhas)
+print(tab.round(3).to_string(index=False))
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 3.8))
+# (a) composição das conclusões por tipo
+comp_mix = tab.set_index('tipo')[['apos_ver','viu_depois','sem_ver']]
+(comp_mix.div(comp_mix.sum(axis=1), axis=0)*100).plot.bar(
+    stacked=True, ax=ax[0], color=['#2E7D32','#C62828', IFOOD_RED])
+ax[0].set_title('Composição das conclusões (%)'); ax[0].set_ylabel('% das conclusões')
+ax[0].tick_params(rotation=0); ax[0].legend(fontsize=7)
+
+# (b) volumes absolutos sobre o total de recebidas
+x = np.arange(len(tab)); w = 0.25
+ax[1].bar(x-w, tab.apos_ver, w, label='após ver', color='#2E7D32')
+ax[1].bar(x,   tab.viu_depois, w, label='viu só depois', color='#C62828')
+ax[1].bar(x+w, tab.sem_ver, w, label='sem ver', color=IFOOD_RED)
+ax[1].set_xticks(x); ax[1].set_xticklabels(tab.tipo)
+ax[1].set_title('Conclusões por tipo (volume)'); ax[1].legend(fontsize=7)
+plt.tight_layout(); plt.show()""")
+
+md("""**Leitura:** das **33.631** conclusões de bogo/discount, apenas **70,4%
+(23.677)** aconteceram *depois* de o cliente ver a oferta. As outras **29,6%
+(9.954)** tiveram o desconto pago sem que a oferta tivesse influenciado a compra:
+**17,0% nunca foram vistas** dentro da validade e **12,5% só foram vistas depois**
+de o cupom já ter sido resgatado.
+
+Por tipo, o padrão difere: **discount** tem mais conclusões no total (58,8% vs
+51,4%), mas também mais resgates às cegas — **11,3%** das ofertas de discount são
+completadas sem visualização, contra **7,5%** das bogo. Faz sentido pela mecânica:
+discount tem gasto mínimo maior e prazo mais longo, então é mais fácil o cliente
+atingir o valor no curso normal das compras, sem nunca abrir a oferta.
+
+Esse é o desperdício que a estratégia precisa atacar — e a razão pela qual medir
+apenas "quem completa" enviesaria a decisão de envio.""")
 
 md("""# Alvo exploratório em nível de cliente + variáveis
 Construímos uma tabela **cliente** apenas com agregações brutas (sem janela) para

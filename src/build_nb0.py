@@ -149,6 +149,47 @@ print('desses, gender nulo :', profile.loc[profile.age==118,'gender'].isna().mea
 print('desses, limite nulo :', profile.loc[profile.age==118,'credit_card_limit'].isna().mean())
 print('-> 118 é placeholder de perfil incompleto (100% coincide com os nulos).')""")
 
+md("""### O placeholder tem concentração de data de cadastro?
+Pergunta: o `age==118` é um **lote específico** (ex.: uma migração de dados legada
+num único dia) ou está espalhado pelo tempo, proporcional ao crescimento normal da
+base? Comparamos a cadência mensal de cadastro dos dois grupos.""")
+co("""p_ph = profile[profile.age == 118]
+p_ok = profile[profile.age != 118]
+
+m_ph = p_ph.registered_on.dt.to_period('M').value_counts(normalize=True).sort_index()
+m_ok = p_ok.registered_on.dt.to_period('M').value_counts(normalize=True).sort_index()
+m_ph.index = m_ph.index.astype(str); m_ok.index = m_ok.index.astype(str)
+
+fig, ax = plt.subplots(figsize=(12, 3.6))
+ax.plot(m_ok.index, m_ok.values*100, color='#4C72B0', marker='.', ms=3, label=f'age != 118 (n={len(p_ok):,})')
+ax.plot(m_ph.index, m_ph.values*100, color=IFOOD_RED, marker='.', ms=3, label=f'age == 118 (n={len(p_ph):,})')
+ax.set_xticks(ax.get_xticks()[::3]); ax.tick_params(axis='x', rotation=45, labelsize=7)
+ax.set_ylabel('% dos cadastros do grupo, por mês')
+ax.set_title('Cadência de cadastro: placeholder (age==118) vs demais — mesmo formato de curva?')
+ax.legend(); plt.tight_layout(); plt.show()
+
+max_day_ph = p_ph.registered_on.dt.date.value_counts().max()
+max_day_ok = p_ok.registered_on.dt.date.value_counts().max()
+print(f'maior concentração num único dia — placeholder: {max_day_ph} ({max_day_ph/len(p_ph):.1%} do grupo) '
+      f'| demais: {max_day_ok} ({max_day_ok/len(p_ok):.1%} do grupo)')
+print(f'dias distintos de cadastro — placeholder: {p_ph.registered_on.dt.date.nunique()} de {len(p_ph)} '
+      f'| demais: {p_ok.registered_on.dt.date.nunique()} de {len(p_ok)}')
+
+print('\\ndistribuição por ano (% dentro de cada grupo):')
+print(pd.crosstab(profile.registered_on.dt.year, profile.age == 118, normalize='columns')
+      .rename(columns={False: 'age!=118', True: 'age==118'}).round(3).to_string())""")
+md("""**Leitura:** **não há concentração temporal.** As duas curvas mensais praticamente
+se sobrepõem, e a distribuição por ano é quase idêntica entre os grupos (ex.: 2017
+concentra 40,0% do grupo placeholder vs 37,8% dos demais; 2016: 23,1% vs 20,4%). O
+dia de maior volume dentro do grupo placeholder representa só ~0,5% dele — muito
+longe de indicar um lote/importação pontual.
+
+Isso **descarta a hipótese de migração/evento único** como origem do placeholder.
+O padrão sugere, em vez disso, uma **falha estrutural persistente** no fluxo de
+cadastro — uma fração constante de usuários (~12,8%) não preenche idade/gênero/
+limite, e isso se repete de forma proporcional ao longo de toda a janela de dados
+(2013–2018), não em um pico isolado.""")
+
 md("""### Distribuições — idade, gênero, limite de crédito, ano de cadastro
 Dados **brutos, sem pré-filtro**: se há placeholder ou nulo, o gráfico deve
 deixar isso visível (não escondemos nada antes de plotar).""")

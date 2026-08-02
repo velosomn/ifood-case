@@ -317,6 +317,36 @@ print(policy[policy.send].best_offer.map(
         lambda r: f"{r.offer_type} min={r.min_value:.0f} desc={r.discount_value:.0f} dur={r.duration:.0f}", axis=1)
 ).value_counts().head().to_string())""")
 
+md("""### Interface de produção: `recomendar_oferta(cliente_id)`
+Empacota a lógica acima (mesma matriz de scores `S`, já calculada) numa função
+única — o contrato que um serviço de recomendação chamaria por cliente.""")
+co('''def recomendar_oferta(account_id, verbose=True):
+    """Recomenda a melhor oferta para um cliente (ou None, se nenhuma compensa).
+
+    Reusa os modelos já treinados (m0 = baseline sem oferta, m1[tipo] = com
+    oferta) via a matriz de scores S. Retorna o offer_id de maior CATE líquido
+    esperado, ou None quando o melhor CATE é <= 0 (não vale enviar).
+    """
+    if account_id not in S.index:
+        raise KeyError(f"cliente {account_id} fora da base de teste (sem features pré-onda)")
+    row = S.loc[account_id]
+    best_offer, best_cate = row.idxmax(), row.max()
+    if best_cate <= 0:
+        if verbose:
+            print(f"{account_id}: NÃO enviar (melhor CATE R$ {best_cate:.2f} <= 0)")
+        return None
+    o = offers.set_index("offer_id").loc[best_offer]
+    if verbose:
+        print(f"{account_id}: enviar '{best_offer}' ({o.offer_type}, "
+              f"min={o.min_value:.0f} desc={o.discount_value:.0f} dur={o.duration:.0f}d) "
+              f"-> CATE esperado R$ {best_cate:.2f}")
+    return best_offer
+
+
+print("=== Exemplos (clientes reais da base de teste) ===")
+for cid in test_cust.account_id.sample(5, random_state=7):
+    recomendar_oferta(cid)''')
+
 md("""### Robustez — política sob restrição de diversidade
 A política irrestrita concentra os envios em poucas ofertas. Riscos não modelados
 (saturação, canibalização, portfólio) pedem diversificação — impomos um **teto de

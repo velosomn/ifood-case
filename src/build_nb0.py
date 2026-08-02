@@ -232,27 +232,45 @@ print('\\ndistribuição por faixa de limite:')
 print(pv.faixa_limite.value_counts().sort_index().to_string())
 print('\\n-> piso rígido em 30k e teto em 120k: sem baixa renda e sem elite (base curada/sintética).')""")
 
-md("### Gênero × Limite de crédito (destaque)")
+md("""### Gênero × Limite de crédito (destaque)
+`unknown` não aparece nos gráficos (a) e (b) por uma razão estrutural, não por
+filtro escondido: é o mesmo grupo do placeholder `age==118`, e **100% desse
+grupo também tem `credit_card_limit` nulo** — não existe valor numérico para
+desenhar num boxplot ou numa densidade. O gráfico (c) inclui `unknown` de
+propósito: ali ele aparece como **100% "sem dado"**, o que é informativo.""")
 co("""fig, ax = plt.subplots(1, 3, figsize=(14, 4))
 order = ['F','M','O']
-# (a) boxplot do limite por gênero
+
+# (a) boxplot do limite por gênero — 'unknown' fica fora: seu limite é 100% nulo
 data = [pv.loc[pv.gender==g,'credit_card_limit'].dropna() for g in order]
 ax[0].boxplot(data, tick_labels=order, showmeans=True)
 ax[0].set_title('Limite por gênero (boxplot)'); ax[0].set_ylabel('credit_card_limit')
 
-# (b) densidade do limite por gênero
+# (b) densidade do limite por gênero — mesma razão
 for g,c in zip(order, [IFOOD_RED,'#4C72B0','#2E7D32']):
     pv.loc[pv.gender==g,'credit_card_limit'].plot.kde(ax=ax[1], label=g, color=c)
 ax[1].set_title('Distribuição do limite por gênero'); ax[1].set_xlim(20000,130000); ax[1].legend()
 
-# (c) mix de faixas de limite dentro de cada gênero (normalizado)
-mix = pd.crosstab(pv.gender, pv.faixa_limite, normalize='index').loc[order]
+# (c) mix de faixas de limite — aqui SIM incluímos 'unknown', usando a base
+# bruta (profile, não pv) e tratando limite nulo como sua própria categoria
+prof_mix = profile.copy()
+prof_mix['gender'] = prof_mix['gender'].fillna('unknown')
+prof_mix['faixa_limite'] = pd.cut(prof_mix.credit_card_limit, bins, labels=labels)
+prof_mix['faixa_limite'] = prof_mix['faixa_limite'].astype('object').fillna('sem dado')
+order_c = order + ['unknown']
+mix = pd.crosstab(prof_mix.gender, prof_mix.faixa_limite, normalize='index').loc[order_c]
 mix.plot(kind='bar', stacked=True, ax=ax[2], colormap='viridis')
-ax[2].set_title('Faixa de limite dentro de cada gênero'); ax[2].tick_params(axis='x', rotation=0)
+ax[2].set_title("Faixa de limite por gênero\\n('unknown' = 100% sem dado)")
+ax[2].tick_params(axis='x', rotation=0)
 ax[2].legend(fontsize=7, ncol=2, title='faixa')
+
+fig.text(0.5, -0.04,
+         "(a) e (b) não incluem 'unknown' (12,8% da base): mesmo grupo do placeholder\\n"
+         "age=118 — sem credit_card_limit conhecido, não há valor a plotar.",
+         ha='center', fontsize=9, color=IFOOD_RED)
 plt.tight_layout(); plt.show()
 
-print('mediana de limite por gênero:')
+print('mediana de limite por gênero (unknown fica de fora — não tem limite):')
 print(pv.groupby('gender').credit_card_limit.agg(['median','mean','count']).round(0).to_string())""")
 
 md("### Gênero × Limite × Idade (mediana de limite)")

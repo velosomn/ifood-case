@@ -448,25 +448,33 @@ levar em conta ao comparar sua rentabilidade.""")
 # ---------------------------------------------------------------- TRANSACTIONS
 md("""# Overview — Transações
 Normalizamos o campo `value` e exploramos eventos, período e valores.""")
+co("""tx.head()""")
+md("""Essa tabela contém eventos de **transações**, **ofertas recebidas**, **ofertas
+visualizadas** e **ofertas completadas** — todos empilhados na mesma estrutura, com
+o detalhe de cada um aninhado no campo `value`.""")
+
+md("### Distribuição relativa dos tipos de evento")
+co("""tx.event.value_counts(normalize=True).plot.bar(color=IFOOD_RED, figsize=(6,3.6))""")
+
+md("### Parsing do campo `value` e cobertura temporal")
 co("""tx['offer_id'] = tx['value'].apply(lambda d: d.get('offer id') or d.get('offer_id'))
 tx['amount'] = tx['value'].apply(lambda d: d.get('amount'))
 print('eventos:', tx.event.value_counts().to_dict())
 print('período (dias):', tx.time_since_test_start.min(), '->', tx.time_since_test_start.max())
 print('clientes distintos:', tx.account_id.nunique())""")
-co("""fig, ax = plt.subplots(1, 3, figsize=(13, 3.4))
-tx.event.value_counts().plot.bar(ax=ax[0], color=IFOOD_RED); ax[0].set_title('Volume por evento'); ax[0].tick_params(rotation=30)
+co("""fig, ax = plt.subplots(1, 2, figsize=(13, 3.4))
 
 # Eventos por dia. 'offer received' é EM LOTE (só em 6 dias) -> barras;
 # viewed/completed/transaction fluem no tempo -> linhas. fillna(0) evita a
 # 'linha invisível' de pontos isolados entre NaNs.
 byday = tx.groupby([tx.time_since_test_start.astype(int), 'event']).size().unstack('event').fillna(0)
-ax[1].bar(byday.index, byday['offer received'], color='#FFB300', alpha=.55, label='offer received (lote)')
+ax[0].bar(byday.index, byday['offer received'], color='#FFB300', alpha=.55, label='offer received (lote)')
 for ev, col in [('offer viewed','#2E7D32'),('offer completed','#1565C0'),('transaction',IFOOD_RED)]:
-    ax[1].plot(byday.index, byday[ev], color=col, marker='o', ms=2, label=ev)
-ax[1].set_title('Eventos por dia'); ax[1].set_xlabel('dia'); ax[1].legend(fontsize=6)
+    ax[0].plot(byday.index, byday[ev], color=col, marker='o', ms=2, label=ev)
+ax[0].set_title('Eventos por dia'); ax[0].set_xlabel('dia'); ax[0].legend(fontsize=6)
 
 amt = tx.amount.dropna()
-ax[2].hist(amt[amt < amt.quantile(.99)], bins=40, color='#37474F'); ax[2].set_title('Valor da transação (<p99)')
+ax[1].hist(amt[amt < amt.quantile(.99)], bins=40, color='#37474F'); ax[1].set_title('Valor da transação (<p99)')
 plt.tight_layout(); plt.show()
 send_days = list(byday.index[byday['offer received']>0])
 print('dias de envio (offer received > 0):', send_days)

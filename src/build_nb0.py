@@ -713,9 +713,78 @@ md("# Correlações entre variáveis numéricas (nível cliente)")
 co("""num_cols = ['age','credit_card_limit','account_age_years','n_transactions',
             'total_spend','avg_ticket','n_completed','n_cegas']
 high = print_correlation_matrix(cust, num_cols, corr_max=0.75)""")
-md("""**Leitura:** as variáveis de volume/gasto são fortemente correlacionadas entre
-si — candidatas a redução na feature selection. `n_completed` e `n_cegas` também
-acompanham `total_spend`, consistente com o que o gráfico anterior mostrou.""")
+md("""**Leitura:** o par mais forte é **`total_spend` × `avg_ticket` (0,78)** — único
+acima do corte de 0,75, candidato natural a redução na feature selection. Já
+`n_transactions` é praticamente ortogonal ao ticket (−0,06): volume e valor por
+compra são dimensões independentes aqui, então vale manter as duas.""")
+
+md("""# Identificação do grupo de controle
+O item anterior mostrou que precisamos de um contrafactual. A cadência **em lote**
+descoberta no overview de transações abre essa porta: se as ofertas saem em ondas,
+alguém pode não ter recebido em uma dada onda — e esse alguém serve de comparação.""")
+co("""ondas = sorted(rec.t_recv.unique())
+todos = set(profile.account_id) if 'account_id' in profile.columns else set(profile.id)
+linhas = []
+for w in ondas:
+    recebeu = set(rec.loc[rec.t_recv == w, 'account_id'])
+    nao_recebeu = todos - recebeu
+    # controle "limpo": além de não receber agora, não pode ter oferta de onda
+    # anterior ainda vigente (senão está contaminado por tratamento passado)
+    vigente = set(rec.loc[(rec.t_recv < w) & (rec.t_end > w), 'account_id'])
+    linhas.append({'onda (dia)': int(w), 'recebeu': len(recebeu),
+                   'não recebeu': len(nao_recebeu),
+                   'controle limpo': len(nao_recebeu - vigente)})
+ctrl = pd.DataFrame(linhas)
+ctrl['% controle limpo'] = (ctrl['controle limpo'] / len(todos) * 100).round(1)
+print(ctrl.to_string(index=False))
+
+fig, ax = plt.subplots(figsize=(8, 3.4))
+ax.bar(ctrl['onda (dia)'].astype(str), ctrl['recebeu'], label='recebeu oferta', color='#4C72B0')
+ax.bar(ctrl['onda (dia)'].astype(str), ctrl['controle limpo'],
+       bottom=ctrl['recebeu'], label='controle limpo', color='#2E7D32')
+ax.set_xlabel('onda (dia do teste)'); ax.set_ylabel('clientes')
+ax.set_title('Cada onda deixa de fora ~25% da base — o grupo de controle')
+ax.legend(fontsize=8); plt.tight_layout(); plt.show()""")
+
+md("""### O controle é comparável aos tratados? (balance check)
+Ter um grupo sem oferta não basta: ele só serve como contrafactual se for
+**parecido** com quem recebeu. Comparamos características medidas **antes** da onda
+— se o envio foi essencialmente aleatório, as médias devem bater.""")
+co("""W_CHECK = 17.0   # onda com histórico prévio suficiente para comparar
+recebeu = set(rec.loc[rec.t_recv == W_CHECK, 'account_id'])
+vigente = set(rec.loc[(rec.t_recv < W_CHECK) & (rec.t_end > W_CHECK), 'account_id'])
+controle = todos - recebeu - vigente
+
+trans_ev = tx[tx.event == 'transaction']
+pre = (trans_ev[trans_ev.time_since_test_start < W_CHECK]
+       .groupby('account_id').amount.agg(gasto_pre='sum', n_tx_pre='size'))
+perfil_ix = profile.set_index('account_id' if 'account_id' in profile.columns else 'id')
+
+def resumo(ids, nome):
+    s = pre.reindex(list(ids)).fillna(0)
+    p = perfil_ix.reindex(list(ids))
+    return {'grupo': nome, 'n': len(ids),
+            'gasto_pré': s.gasto_pre.mean(), 'transações_pré': s.n_tx_pre.mean(),
+            'idade': p.age.replace(118, np.nan).mean(),
+            '% perfil incompleto': (p.age == 118).mean()*100}
+
+bal = pd.DataFrame([resumo(recebeu, 'recebeu (tratado)'), resumo(controle, 'controle limpo')])
+print(bal.round(2).to_string(index=False))
+print('\\nclientes que servem de controle limpo em ao menos uma onda:',
+      f"{len(set().union(*[todos - set(rec.loc[rec.t_recv==w,'account_id']) - set(rec.loc[(rec.t_recv<w)&(rec.t_end>w),'account_id']) for w in ondas])):,}")""")
+md("""**Leitura:** em cada onda, **~4,2–4,4 mil clientes (25%) não recebem oferta**.
+Descontando quem ainda tem oferta anterior vigente, sobra um **controle limpo** que
+vai de 4.350 (onda 0, a mais limpa por não haver passado) a ~1,2 mil nas ondas
+finais — quando a cadência acelera e mais gente está sob oferta ativa.
+
+O balance check é o que valida o desenho: tratados e controle têm **gasto prévio
+(R$ 51,78 vs 47,57), número de transações (4,11 vs 3,77), idade (54,4 vs 55,0) e
+taxa de perfil incompleto (12,9% vs 13,8%) praticamente iguais**. Nenhuma diferença
+sugere seleção — o envio se comporta como **aleatorizado**, o que habilita comparar
+os dois grupos diretamente.
+
+É esse achado que torna o case tratável: sem ele, não haveria como separar a venda
+que a oferta *causou* daquela que aconteceria de qualquer forma.""")
 
 md("""# Conclusões da EDA (dados brutos)
 1. **Qualidade:** `age==118` = perfil incompleto (~12,8%) ≡ nulos de gênero/limite →
@@ -724,22 +793,33 @@ md("""# Conclusões da EDA (dados brutos)
 2. **Ofertas:** 4 BOGO, 4 discount, 2 informational; duração 3–10 dias define a
    **janela de atribuição** do processing; `informational` não tem "completar".
    Economia distinta: BOGO paga ~1x o gasto destravado, discount ~4x.
-3. **Recompensa desperdiçada (achado central):** das 33.631 conclusões de
-   bogo/discount, só **70,4%** ocorreram após o cliente ver a oferta. **29,6%** dos
-   cupons foram pagos sem influenciar a compra (17,0% nunca vistos + 12,5% vistos só
-   depois do resgate). Discount desperdiça mais que BOGO (11,3% vs 7,5% das enviadas).
+3. **Recompensa desperdiçada (achado central):** das 33.631 conclusões atribuídas a
+   ofertas bogo/discount, só **70,4%** ocorreram após o cliente ver a oferta.
+   **29,6%** dos cupons foram pagos sem influenciar a compra (17,0% nunca vistos +
+   12,5% vistos só depois do resgate). Discount desperdiça mais que BOGO (11,3% vs
+   7,5% das enviadas). *Nota: 33.631 atribuições vs 33.579 eventos brutos de
+   `offer completed` — a diferença vem de ofertas repetidas com janelas sobrepostas,
+   em que um mesmo resgate é atribuído a mais de um envio.*
 4. **Conclusão de oferta acompanha o gasto** (15% no menor quintil → **100%** no
    maior), assim como as conclusões às cegas → o alvo de decisão precisa ser o
    **efeito incremental do envio**, o que exige grupo de controle.
-5. **Perfil dos segmentos:** limite de crédito, idade e idade da conta acompanham o
-   gasto. Variáveis de volume/gasto são correlacionadas entre si (feature selection).
+5. **Perfil dos segmentos:** o **limite de crédito** é o que melhor acompanha o gasto
+   (R$ 64 → R$ 182, monotônico). Idade e idade da conta sobem até o meio da
+   distribuição e depois **estabilizam ou caem** — relação não linear. Entre as
+   comportamentais, só `total_spend` × `avg_ticket` passa de 0,75 de correlação;
+   `n_transactions` é ortogonal ao ticket (−0,06).
 6. **Timing:** envios são **em lote** em 6 dias (0,7,14,17,21,24), com cadência que
    **acelera** (de semanal para cada 3–4 dias); cada envio gera uma onda decrescente
    de visualização/conclusão — relevante para timing de campanha.
+7. **Existe grupo de controle utilizável (viabiliza todo o resto):** cada onda deixa
+   **~25% da base sem oferta**; descontando quem tem oferta anterior vigente, o
+   controle limpo vai de 4.350 (onda 0) a ~1,2 mil (ondas finais). O balance check na
+   onda 17 mostra tratados e controle equivalentes em gasto prévio, transações, idade
+   e perfil incompleto → **o envio se comporta como aleatorizado**.
 
-→ Próximo passo: `1_data_processing.ipynb` — a cadência em lote do item 6 é o que
-torna possível identificar um **grupo de controle** (quem não recebeu em cada onda),
-permitindo finalmente medir o efeito causal exigido pelo item 4.
+→ Próximo passo: `1_data_processing.ipynb` — formalizar o grupo de controle do item 7
+em uma tabela (cliente × onda) com features estritamente pré-onda, para medir no
+`2_modeling.ipynb` o efeito incremental exigido pelo item 4.
 """)
 
 nb["cells"] = c

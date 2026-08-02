@@ -149,20 +149,38 @@ print('desses, gender nulo :', profile.loc[profile.age==118,'gender'].isna().mea
 print('desses, limite nulo :', profile.loc[profile.age==118,'credit_card_limit'].isna().mean())
 print('-> 118 é placeholder de perfil incompleto (100% coincide com os nulos).')""")
 
-md("### Distribuições — idade, gênero, limite de crédito, ano de cadastro")
+md("""### Distribuições — idade, gênero, limite de crédito, ano de cadastro
+Dados **brutos, sem pré-filtro**: se há placeholder ou nulo, o gráfico deve
+deixar isso visível (não escondemos nada antes de plotar).""")
 co("""fig, ax = plt.subplots(2, 2, figsize=(12, 7))
-prof_valid = profile[profile.age != 118]
-ax[0,0].hist(prof_valid.age, bins=30, color='#4C72B0'); ax[0,0].set_title('Idade (excl. placeholder 118)')
-profile.gender.fillna('unknown').value_counts().plot.bar(ax=ax[0,1], color=IFOOD_RED); ax[0,1].set_title('Gênero'); ax[0,1].tick_params(rotation=0)
-ax[1,0].hist(prof_valid.credit_card_limit.dropna(), bins=30, color='#4C72B0'); ax[1,0].set_title('Limite do cartão')
-# robusto à ordem de execução: garante registered_on como datetime
+
+# idade SEM filtrar o placeholder — o pico em 118 tem que aparecer no histograma
+ax[0,0].hist(profile.age, bins=40, color='#4C72B0')
+ax[0,0].axvline(118, color=IFOOD_RED, ls='--', lw=1.2)
+ax[0,0].text(118, ax[0,0].get_ylim()[1]*0.92, ' placeholder\\n 118', color=IFOOD_RED, fontsize=8)
+ax[0,0].set_title('Idade (bruta — sem excluir 118)')
+
+# gênero: nulo vira sua própria barra ('unknown'), não desaparece
+profile.gender.fillna('unknown').value_counts().plot.bar(ax=ax[0,1], color=IFOOD_RED)
+ax[0,1].set_title('Gênero (unknown = nulo)'); ax[0,1].tick_params(rotation=0)
+
+# limite: histograma só aceita número (NaN não entra), mas o nº de nulos fica anotado no título
+n_null_lim = profile.credit_card_limit.isna().sum()
+ax[1,0].hist(profile.credit_card_limit.dropna(), bins=30, color='#4C72B0')
+ax[1,0].set_title(f'Limite do cartão ({n_null_lim} nulos = {n_null_lim/len(profile):.1%}, fora do histograma)')
+
 if not pd.api.types.is_datetime64_any_dtype(profile['registered_on']):
     profile['registered_on'] = pd.to_datetime(profile['registered_on'], format='%Y%m%d')
-profile.registered_on.dt.year.value_counts().sort_index().plot.bar(ax=ax[1,1], color='#37474F'); ax[1,1].set_title('Ano de cadastro'); ax[1,1].tick_params(rotation=0)
+profile.registered_on.dt.year.value_counts().sort_index().plot.bar(ax=ax[1,1], color='#37474F')
+ax[1,1].set_title('Ano de cadastro'); ax[1,1].tick_params(rotation=0)
 plt.tight_layout(); plt.show()""")
-md("""**Leitura:** idade ~normal centrada em 55–60; base majoritariamente masculina;
-limite de crédito com forte cauda à direita; cadastros concentrados em 2017–2018.
-Perfis incompletos (~12,8%) precisarão de flag + imputação (não descartar).""")
+md("""**Leitura:** o histograma de idade expõe o próprio problema — um pico
+isolado em **118**, destacado no gráfico, claramente fora da distribuição normal
+que vai até ~100. Gênero mostra a barra `unknown` (nulo) do tamanho real (12,8%).
+Limite de crédito: o histograma matemático não plota `NaN`, então o título
+declara quantos ficaram de fora — os mesmos 12,8% do gênero. As três pistas
+juntas (idade 118 + gênero nulo + limite nulo) confirmam que é o mesmo grupo de
+perfis incompletos.""")
 
 md("""### Idade da conta (`account_age`)
 Feature de perfil = **há quanto tempo o cliente tem conta** (tempo desde
@@ -193,8 +211,19 @@ md("""## Perfil socioeconômico do público
 O `credit_card_limit` é o melhor marcador de estrato social disponível. Analisamos
 sua distribuição, os cortes por faixa e — em destaque — a **combinação gênero ×
 limite**.""")
-co("""pv = profile[profile.age != 118].copy()   # perfis completos (têm limite)
-print('limite — describe:')
+co("""# Boxplot/KDE por gênero (abaixo) não plotam NaN — esse filtro é uma
+# necessidade matemática do gráfico, não uma limpeza escondida. Por isso
+# imprimimos exatamente quem fica de fora, E por gênero, antes de seguir —
+# para provar que 'O' (other) não é afetado (age==118 não tem esse gênero).
+n_excl = (profile.age == 118).sum()
+print(f'excluídos desta seção: {n_excl} clientes ({n_excl/len(profile):.1%}) '
+      f'— mesmo grupo de age==118 / limite nulo / gênero nulo já visto acima')
+print('\\ncomposição de gênero ANTES do filtro:')
+print(profile.gender.fillna('unknown').value_counts().to_string())
+pv = profile[profile.age != 118].copy()
+print('\\ncomposição de gênero DEPOIS do filtro (deve preservar F/M/O intactos):')
+print(pv.gender.value_counts().to_string())
+print('limite — describe (apenas quem tem limite conhecido):')
 print(pv.credit_card_limit.describe(percentiles=[.01,.05,.25,.5,.75,.95,.99]).round(0).to_string())
 bins=[0,30000,50000,80000,100000,120000,1e9]
 labels=['<30k','30-50k','50-80k','80-100k','100-120k','>120k']

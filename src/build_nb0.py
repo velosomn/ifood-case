@@ -614,10 +614,8 @@ da oferta), o eixo de interesse aqui é o **gasto**; e a pergunta causal — qua
 gasto o envio realmente *causou* — só pode ser respondida com o grupo de controle
 identificado no `1_data_processing.ipynb` e medido no `2_modeling.ipynb`.""")
 
-md("""## Por que não usar "completou oferta" como alvo
-Teste direto: a taxa de conclusão por quintil de gasto. Se o alvo fosse informativo
-sobre *resposta à oferta*, não deveria ser determinado quase inteiramente pelo
-volume de compra.""")
+md("""## Conclusão de oferta × volume de gasto
+Teste da afirmação acima: a taxa de conclusão por quintil de gasto.""")
 co("""trans = tx[tx.event=='transaction']
 behav = trans.groupby('account_id').agg(
             n_transactions=('amount','size'),
@@ -666,26 +664,17 @@ ax[1].bar(taut.index.astype(str), taut.conclusoes_cegas_por_cliente, color='#C62
 ax[1].set_ylabel('conclusões às cegas por cliente')
 ax[1].set_title('Quem gasta mais resgata mais SEM ver a oferta'); ax[1].tick_params(rotation=0)
 plt.tight_layout(); plt.show()""")
-md("""**Leitura — a armadilha do alvo ingênuo.** A taxa de conclusão salta de **15%**
-no quintil de menor gasto para **100%** no de maior. Isso não é poder preditivo, é
-**aritmética**: quem gasta ~R$283 em 30 dias cruza um mínimo de R$10–20 em algum
-momento, tenha visto a oferta ou não.
+md("""**Leitura:** a taxa de conclusão salta de **15%** no quintil de menor gasto
+para **100%** no de maior — aritmética, não poder preditivo: quem gasta ~R$283 em 30
+dias cruza um mínimo de R$10–20 em algum momento, tenha visto a oferta ou não.
 
-O segundo gráfico fecha o argumento: as **conclusões às cegas crescem junto com o
-gasto** (0,04 → 1,09 por cliente). Ou seja, os clientes que mais "completam ofertas"
-são também os que mais resgatam cupom **sem que a oferta tenha influenciado nada** —
-exatamente os *sure things* que não deveriam receber desconto.
+O segundo gráfico mostra o outro lado: as **conclusões às cegas crescem junto com o
+gasto** (0,04 → 1,09 por cliente). Os clientes que mais "completam ofertas" são
+também os que mais resgatam cupom sem que a oferta tenha influenciado nada.""")
 
-**Conclusão metodológica:** otimizar "quem completa" selecionaria os maiores
-gastadores, pagando recompensa por vendas que já aconteceriam. Por isso o alvo de
-decisão do case é o **efeito incremental do envio sobre o gasto**, medido contra
-grupo de controle (NB1/NB2) — e as análises abaixo são apenas descritivas.""")
-
-md("""## Perfil dos segmentos por **gasto** (descritivo)
-Trocamos o eixo de interesse: em vez de "quem completa oferta", olhamos **quanto
-cada segmento gasta** — a variável alinhada ao objetivo monetário. Continua
-descritivo: mostra *quem são* os clientes de maior valor, não em quem o cupom
-funciona (isso exige contrafactual).""")
+md("""## Perfil dos segmentos por **gasto**
+Eixo de interesse: **quanto cada segmento gasta** — a variável alinhada ao objetivo
+monetário.""")
 co("""def perfil_por_gasto(df, var, bins=5, label=None):
     d = df.copy()
     if d[var].dtype.kind in 'if' and d[var].nunique() > bins:
@@ -718,18 +707,15 @@ display(perfil_por_gasto(cust, 'account_age_years', label='Gasto médio por quin
 md("""**Leitura:** limite de crédito e idade crescem com o gasto — coerente com o
 perfil socioeconômico já descrito (público maduro, renda estável). A idade da conta
 também acompanha, sugerindo que o **relacionamento consolidado** vem junto com maior
-volume de compra. *(Bucket -1 = valor ausente.)*
-
-Nada disso indica em quem o cupom **funciona** — apenas quem já vale mais hoje.""")
+volume de compra. *(Bucket -1 = valor ausente.)*""")
 
 md("# Correlações entre variáveis numéricas (nível cliente)")
 co("""num_cols = ['age','credit_card_limit','account_age_years','n_transactions',
             'total_spend','avg_ticket','n_completed','n_cegas']
 high = print_correlation_matrix(cust, num_cols, corr_max=0.75)""")
 md("""**Leitura:** as variáveis de volume/gasto são fortemente correlacionadas entre
-si — candidatas a redução na feature selection. Note também a correlação de
-`n_completed` e `n_cegas` com `total_spend`: mais uma evidência de que "completar
-oferta" mede, em grande parte, o próprio volume de compra.""")
+si — candidatas a redução na feature selection. `n_completed` e `n_cegas` também
+acompanham `total_spend`, consistente com o que o gráfico anterior mostrou.""")
 
 md("""# Conclusões da EDA (dados brutos)
 1. **Qualidade:** `age==118` = perfil incompleto (~12,8%) ≡ nulos de gênero/limite →
@@ -742,14 +728,11 @@ md("""# Conclusões da EDA (dados brutos)
    bogo/discount, só **70,4%** ocorreram após o cliente ver a oferta. **29,6%** dos
    cupons foram pagos sem influenciar a compra (17,0% nunca vistos + 12,5% vistos só
    depois do resgate). Discount desperdiça mais que BOGO (11,3% vs 7,5% das enviadas).
-4. **O alvo ingênuo não serve para decidir envio:** "completou oferta" é
-   mecanicamente determinado pelo gasto (15% de conclusão no menor quintil → **100%**
-   no maior), e as conclusões às cegas *crescem* com o gasto. Otimizar isso
-   selecionaria os maiores gastadores, pagando por vendas que já aconteceriam →
-   **o alvo tem que ser o efeito incremental do envio**, exigindo grupo de controle.
-5. **Descritivo (não causal):** limite de crédito, idade e idade da conta acompanham
-   o gasto — caracterizam quem já vale mais hoje, não em quem o cupom funciona.
-   Variáveis de volume/gasto são correlacionadas entre si (feature selection).
+4. **Conclusão de oferta acompanha o gasto** (15% no menor quintil → **100%** no
+   maior), assim como as conclusões às cegas → o alvo de decisão precisa ser o
+   **efeito incremental do envio**, o que exige grupo de controle.
+5. **Perfil dos segmentos:** limite de crédito, idade e idade da conta acompanham o
+   gasto. Variáveis de volume/gasto são correlacionadas entre si (feature selection).
 6. **Timing:** envios são **em lote** em 6 dias (0,7,14,17,21,24), com cadência que
    **acelera** (de semanal para cada 3–4 dias); cada envio gera uma onda decrescente
    de visualização/conclusão — relevante para timing de campanha.

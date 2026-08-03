@@ -43,7 +43,7 @@ ifood-case/
 │   └── processed/         # modeling_table.parquet (gerado pelo NB1)
 ├── notebooks/
 │   ├── 0_eda.ipynb               # EDA dos dados brutos
-│   ├── 1_data_processing.ipynb   # PySpark (dual-mode local/Databricks): dataset unificado
+│   ├── 1_data_processing.ipynb   # PySpark: dataset unificado (roda local e no Databricks)
 │   └── 2_modeling.ipynb          # ATE, modelo de resposta, CATE e política
 ├── src/                   # builders dos notebooks + métricas de uplift
 ├── presentation/          # deck 5 slides (.pptx + .md) + figuras
@@ -70,8 +70,9 @@ python -m nbconvert --to notebook --execute --inplace notebooks/2_modeling.ipynb
 ```
 
 ### Databricks (Community/Free Edition)
-Os notebooks 1 e 2 são **dual-mode**: importe o repo como **Git folder** (ou os
-`.ipynb` via Import) e rode com **Run all**, na ordem:
+Os notebooks 1 e 2 **rodam sem nenhuma alteração** tanto no computador quanto no
+Databricks — eles identificam o ambiente e se adaptam sozinhos. Importe o repo como
+**Git folder** (ou os `.ipynb` via Import) e rode com **Run all**, na ordem:
 1. `1_data_processing.ipynb` — detecta o ambiente, **baixa os dados da URL
    pública do S3 automaticamente** e persiste como tabelas
    (`ifood_modeling_table`, `ifood_offers`). Compatível com serverless (sem

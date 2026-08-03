@@ -35,10 +35,31 @@ tratados podem ter ofertas anteriores ativas (56% de sobreposição) → ATE tam
 reportado no recorte "tratado limpo" (sem oferta ativa no envio).
 """)
 
-md("""## Setup e carga (dual-mode)
-Roda local (parquet de `data/processed/`) ou no Databricks (tabelas salvas pelo
-NB1: `ifood_modeling_table` / `ifood_offers` — **rode o NB1 antes no mesmo
-workspace**). A célula `%pip` instala o xgboost no serverless (no-op local).""")
+md("""## Glossário — os termos usados neste notebook
+
+| Termo | O que significa, em linguagem simples |
+|---|---|
+| **Efeito incremental** (ou *uplift*) | A venda **a mais** que o envio gerou. Não é o quanto o cliente comprou, é o quanto ele comprou **além do que compraria sem a oferta**. |
+| **Grupo de controle** | Os clientes que **não** receberam oferta naquela campanha. Servem de comparação: mostram o que teria acontecido sem o envio. |
+| **ATE** | *Average Treatment Effect* — o efeito **médio** do envio, um número só para toda a base. Responde: *"vale a pena enviar?"* |
+| **CATE** | *Conditional ATE* — o mesmo efeito, mas **calculado para cada cliente e cada oferta**. Responde: *"para quem enviar, e qual oferta?"* |
+| **T-learner** | A técnica usada para estimar o CATE: treina **dois** modelos — um que aprende o comportamento de quem recebeu oferta, outro de quem não recebeu — e o efeito é a **diferença** entre os dois. |
+| **Curva Qini** | Gráfico que responde: *"se eu contatar só os X% melhores segundo o modelo, quanto do ganho total eu capturo?"* Quanto mais a curva sobe rápido no começo, melhor o modelo ordena os clientes. |
+| **Bootstrap** | Forma de calcular a margem de erro: sorteia a amostra milhares de vezes e refaz a conta, para ver o quanto o resultado varia. |
+| **Split temporal** | Treinar com as campanhas antigas e testar nas campanhas seguintes — em vez de sortear as linhas. Simula a situação real de decidir hoje com dados de ontem. |
+| **Model-free** | Resultado medido direto nos dados observados, **sem depender de o modelo estar certo**. É a evidência mais forte que temos. |
+""")
+
+md("""## Preparação e carga dos dados
+Assim como o notebook 1, este **roda tanto no computador quanto no Databricks sem
+alterações** — ele identifica o ambiente e busca os dados no lugar certo:
+
+- **No computador:** lê o arquivo `data/processed/modeling_table.parquet`;
+- **No Databricks:** lê as tabelas `ifood_modeling_table` e `ifood_offers`.
+
+⚠️ Em ambos os casos, **é preciso rodar o notebook 1 antes** — é ele que gera essa
+base. A primeira célula instala a biblioteca `xgboost`, necessária no Databricks
+(no computador local ela já costuma estar instalada e o comando não faz nada).""")
 co("""%pip install -q xgboost""")
 co("""import os, sys, warnings
 warnings.filterwarnings('ignore')

@@ -1,4 +1,4 @@
-"""Builds notebooks/1_data_processing.ipynb — PySpark, dual-mode (local + Databricks).
+"""Builds notebooks/1_data_processing.ipynb — PySpark, roda local e no Databricks.
 
 Desenho: unidade (cliente x onda); tratamento W = envio; controle limpo por onda;
 target resposta = viu & usou (ordem t_view <= t_comp); outcome contínuo = gasto na
@@ -36,10 +36,17 @@ que sustenta tanto o modelo de resposta quanto a leitura causal do envio.
 4. Envio nas ondas ≈ aleatorizado (suportado pelo balance check; validação definitiva = A/B).
 """)
 
-md("""## Setup (dual-mode: local ou Databricks)
-O notebook roda **sem alterações** em ambiente local ou no Databricks (Free Edition/
-Community): detecta o ambiente, obtém a sessão Spark via `getOrCreate` e, se os
-arquivos brutos não existirem no disco, **baixa o tar.gz da URL pública do S3**.""")
+md("""## Preparação do ambiente
+Este notebook **roda tanto no computador local quanto no Databricks, sem precisar
+alterar nada**. A célula abaixo identifica onde está sendo executado e se adapta:
+
+| | No computador | No Databricks |
+|---|---|---|
+| Conexão com o Spark | cria uma nova | usa a que a plataforma já fornece |
+| Dados | lê de `data/raw/` | **baixa da internet** automaticamente |
+
+Se os arquivos brutos não estiverem no disco, o notebook baixa o pacote de dados
+direto da URL pública disponibilizada no enunciado do case.""")
 co("""import os, sys, glob, tarfile, tempfile, urllib.request
 from pathlib import Path
 import pandas as pd

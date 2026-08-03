@@ -27,7 +27,7 @@ oferta antes da compra** (recompensa desperdiçada).
 | **Tratamento** | `W` = **envio** da oferta (a alavanca que o negócio controla) | "Visualizou": é pós-tratamento (mediador) → viés de seleção |
 | **Controle** | Clientes **sem envio na onda e sem oferta anterior ativa** (controle limpo; balance check favorável) | Quase-experimento visto/não-visto |
 | **Unidade** | **(cliente × onda)** — máx. 1 oferta por cliente por onda (verificado) | (cliente × oferta): sem controle, 56% de janelas sobrepostas |
-| **Target resposta** | `y_response` = **viu E usou** (`t_view ≤ t_comp` na validade); informational: viu E transacionou após ver | `completed` puro: inclui auto-resgate (16% das instâncias) |
+| **Target resposta** | `y_response` = **viu E usou** (`t_view ≤ t_comp` na validade), **só bogo/discount** | `completed` puro: inclui auto-resgate (16% das instâncias). Alvo para informational: "comprou após ver" ocorre 47,6% das vezes **sem oferta alguma** — mede atividade basal, não resposta |
 | **Outcome causal** | Gasto em **horizontes fixos** (3–10d) líquido do reward | Janela da oferta: sem equivalente no controle |
 | **Features** | Estritamente **pré-onda** (`t <` dia do envio) | Agregados do período: vazamento temporal |
 | **Validação** | **Split temporal** (treino ondas 0–14, teste 17–24) + Qini/uplift realizado | Split aleatório; AUC como métrica de política |
@@ -94,7 +94,7 @@ O notebook 0 (EDA) é local e lê os JSONs de `data/raw/`.
   **discount 11,63 > bogo 8,65 > informational 5,45**.
 - **Desperdício:** 9,4% das ofertas completadas **sem visualização** + 6,9%
   vistas só depois do resgate → ~30% dos cupons pagos sem efeito na compra.
-- **Modelo de resposta** (viu & usou): AUC **0,795** fora do tempo.
+- **Modelo de resposta** (viu & usou, bogo/discount): AUC **0,806** fora do tempo.
 - **CATE/política:** validação *model-free* por faixas do score — uplift
   realizado **monotônico** (top 20%: R$ 21,15 → bottom 20%: −R$ 0,10);
   só **10%** dos clientes recebiam sua melhor oferta.

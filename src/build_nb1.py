@@ -24,7 +24,7 @@ que sustenta tanto o modelo de resposta quanto a leitura causal do envio.
 | **Unidade = (cliente × onda)** | Os envios ocorrem em 6 ondas (dias 0,7,14,17,21,24) e cada cliente recebe **no máx. 1 oferta por onda** (verificado adiante). A linha fica não-ambígua: tratado (com atributos da oferta) ou controle. | (cliente × oferta recebida): sem linhas de controle não se estima efeito do envio; 56% das janelas se sobrepõem, atribuição ambígua. |
 | **Tratamento W = envio na onda** | É a alavanca que o negócio controla. ~25% da base não recebe nada em cada onda e o *balance check* (adiante) sugere aleatorização → controle utilizável. | W = visualizou: é **pós-tratamento** (mediador); condicionar nele embute viés de seleção. |
 | **Controle limpo** = não recebeu na onda **e** sem janela anterior ativa | Cliente sem oferta vigente é contrafactual do "não enviar". | Usar todos os não-recebedores: contaminados por ofertas anteriores ainda ativas. |
-| **Target resposta `y_response` = viu E usou** (`t_view ≤ t_comp`, na validade) | "Usar" = `offer completed` (resgate). Sem exigir visualização **anterior**, 16,3% das instâncias seriam falsos sucessos (auto-resgate: 9,4% sem ver + 6,9% viu depois). Informational: viu E transacionou após ver. | `completed` puro: contamina o target com compras que ocorreriam de qualquer forma. |
+| **Target resposta `y_response` = viu E usou** (`t_view ≤ t_comp`, na validade), **só para bogo/discount** | "Usar" = `offer completed` (resgate). Sem exigir visualização **anterior**, 16,3% das instâncias seriam falsos sucessos (auto-resgate: 9,4% sem ver + 6,9% viu depois). **Informational fica nulo**: não tem evento de resgate, e "comprou após ver" ocorre 47,6% das vezes sem oferta alguma — mede atividade basal, não resposta. Seu efeito é medido pelo gasto vs controle. | `completed` puro: contamina o target com compras que ocorreriam de qualquer forma. Forçar um alvo para informational: mistura evento impossível-sem-oferta (resgate) com evento que acontece sozinho (compra). |
 | **Outcome contínuo = gasto em horizontes fixos** (3/4/5/7/10d) | Permite contraste tratado × controle com **janelas do mesmo tamanho** (controle não tem `duration`). | Gasto na janela da oferta apenas: sem equivalente no controle. |
 | **Features estritamente pré-onda** (`t < dia da onda`) | Fecha vazamento temporal. Onda 0 fica sem histórico → flag `has_history`. | Agregados do período todo: vazam o próprio desfecho. |
 | **Split temporal** (treino ondas 0–14, teste 17–24; aplicado no NB2) | Simula decisão real: treinar no passado, decidir no futuro. | Split aleatório: vaza o futuro e superestima performance. |
@@ -227,14 +227,18 @@ tx_after_view = (attrib.filter("offer_type = 'informational' and viewed = 1")
 attrib = attrib.join(tx_after_view, ["account_id", "wave"], "left") \\
                .fillna({"n_tx_after_view": 0})
 
-# alvo por tipo: bogo/discount = viu antes de usar; informational = viu e transacionou
-# depois (não existe 'completed' para informational, então view_before_comp seria 0)
-alvo = (F.when(F.col("offer_type") == "informational",
-               ((F.col("viewed") == 1) & (F.col("n_tx_after_view") > 0)).cast("int"))
-         .otherwise(F.col("view_before_comp")))
+# y_response (viu antes de usar) só existe para bogo/discount; informational não tem
+# evento de resgate. Para referência, mostramos também quantos informational
+# transacionaram após ver — mas isso NÃO vira alvo (ver justificativa acima).
 attrib.groupBy("offer_type").agg(
-    F.mean("viewed").alias("view_rate"), F.mean("completed").alias("comp_rate"),
-    F.mean(alvo).alias("y_response")).show()""")
+    F.mean("viewed").alias("view_rate"),
+    F.mean("completed").alias("comp_rate"),
+    # cada métrica só é exibida onde é definida — evita 0.0 que parece medição
+    F.mean(F.when(F.col("offer_type") != "informational",
+                  F.col("view_before_comp"))).alias("y_response"),
+    F.mean(F.when(F.col("offer_type") == "informational",
+                  ((F.col("viewed") == 1) & (F.col("n_tx_after_view") > 0)).cast("int"))
+     ).alias("viu_e_transacionou")).show()""")
 
 md("""## Outcomes em horizontes fixos (todas as linhas, tratado e controle)
 Gasto e nº de transações em `[onda, onda+h]` para h ∈ {3,4,5,7,10} — janelas
@@ -301,11 +305,13 @@ co("""modeling = (grid
     .withColumn("comp_rate_pre",
                 F.when(F.col("n_received_pre") > 0,
                        F.col("n_completed_pre") / F.col("n_received_pre")).otherwise(None))
-    # target resposta: viu E usou (ordem); informational: viu E transacionou após ver
+    # Target resposta: viu E usou o cupom (com ordem). NULO para informational —
+    # esse tipo não tem evento de resgate, e "comprou após ver" acontece 47,6% das
+    # vezes sem oferta nenhuma (baseline do controle), então não é alvo comparável.
+    # O efeito de informational é medido pelo gasto vs controle (NB2), não aqui.
     .withColumn("y_response",
-                F.when(F.col("W") == 0, F.lit(0))
-                 .when(F.col("offer_type") == "informational",
-                       ((F.col("viewed") == 1) & (F.col("n_tx_after_view") > 0)).cast("int"))
+                F.when(F.col("offer_type") == "informational", F.lit(None).cast("int"))
+                 .when(F.col("W") == 0, F.lit(0))
                  .otherwise(F.col("view_before_comp")))
     # outcome líquido na janela da oferta (tratados)
     .withColumn("y_net_window",
@@ -313,8 +319,11 @@ co("""modeling = (grid
 
 n_rows = modeling.count()
 print("tabela de modelagem:", n_rows, "linhas x", len(modeling.columns), "colunas")
-modeling.groupBy("W").agg(F.count("*").alias("n"), F.mean("y_response").alias("y_resp"),
-                          F.mean("spend_h7").alias("spend_h7")).show()""")
+modeling.groupBy("W").agg(
+    F.count("*").alias("n"),
+    F.count("y_response").alias("n_com_alvo"),   # exclui informational (nulo)
+    F.mean("y_response").alias("y_resp"),
+    F.mean("spend_h7").alias("spend_h7")).show()""")
 
 md("""## Sanity checks
 1. Batem com a EDA estrutural (funil com ordem, controle limpo por onda)?
@@ -359,9 +368,14 @@ md("""## Resumo
 - **Saída:** `modeling_table.parquet` — 102.000 linhas (cliente × onda): ~76,3k
   tratadas (`W=1`, com atributos da oferta e atribuição na janela) e ~25,7k de
   controle (~15,6k limpas), com outcomes em horizontes fixos e features pré-onda.
-- **Targets:** `y_response` (viu E usou, com ordem) e `y_net_window` / `spend_h*`
-  (impacto contínuo).
-- **Próximo (NB2):** split temporal por onda, modelo de resposta por oferta,
+- **Targets:** `y_response` (viu E usou, com ordem) — definido apenas para
+  bogo/discount, **nulo para informational**; e `y_net_window` / `spend_h*`
+  (impacto contínuo), disponíveis para **todas** as linhas, inclusive controle.
+- **Por que dois targets:** o de resposta serve para entender *quem usa cupom* e só
+  faz sentido onde existe resgate; o contínuo é o que sustenta a decisão de envio,
+  porque pode ser comparado contra o grupo de controle — inclusive para
+  informational, cujo efeito só aparece como variação de gasto.
+- **Próximo (NB2):** split temporal por onda, modelo de resposta (bogo/discount),
   contraste causal tratado × controle limpo e política de envio.""")
 co("""spark.stop() if not IS_DATABRICKS else None""")
 

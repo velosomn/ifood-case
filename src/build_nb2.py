@@ -2,7 +2,7 @@
 
 A. Split temporal (ondas 0-14 treino / 17-24 teste)
 B. ATE do envio: tratados x controle limpo, gasto líquido de reward, bootstrap
-C. Modelo de resposta P(viu & usou) — XGBoost, avaliação temporal + calibração
+C. Modelo de resposta P(viu & usou) — XGBoost (bogo/discount), avaliação temporal
 D. CATE — T-learner por tipo de oferta (3 braços vs controle limpo) no gasto líquido
 E. Política (argmax valor líquido incremental, incl. "nenhuma") + Qini + simulação
 """
@@ -25,7 +25,7 @@ linhas, tratamento **W = envio**, controle limpo por onda, features pré-onda.
 |---|---|---|---|
 | **A** | Split **temporal**: treino ondas 0–14, teste 17–24 | Simula a decisão real (treinar no passado, decidir no futuro) | Split aleatório: vaza o futuro |
 | **B** | **ATE do envio**: tratados × controle limpo, gasto em 7d **líquido do reward**, IC bootstrap | Responde "quanto o envio gera de incremento, descontado o cupom" | Atribuir todo o gasto da janela à oferta: ~43% ocorreria sem ela |
-| **C** | **Modelo de resposta** `P(viu & usou)` (XGBoost) | Target de negócio definido no case; identifica quem responde | AUC como métrica final da política (não mede incremento) |
+| **C** | **Modelo de resposta** `P(viu & usou)` (XGBoost), **só bogo/discount** | Target de negócio definido no case; identifica quem responde. Informational fica fora: sem evento de resgate, e "comprou após ver" ocorre 47,6% das vezes sem oferta — mede atividade basal | Incluir informational com alvo "comprou após ver": mistura evento impossível-sem-oferta com evento que acontece sozinho |
 | **D** | **CATE** — T-learner por **tipo** (3 braços × controle limpo) no gasto líquido | Efeito heterogêneo com controle real; braços por tipo mantêm amostra; atributos da oferta diferenciam ofertas dentro do braço | T-learner por offer_id: 8 braços finos demais |
 | **E** | **Política**: argmax do valor líquido incremental esperado, incluindo "nenhuma"; avaliação por **Qini** e simulação financeira | A entrega é uma regra de alocação, não um score | Ranquear por propensão: prioriza quem compraria de qualquer forma |
 
@@ -210,10 +210,17 @@ for t in ['bogo', 'discount', 'informational']:
     print(f"  {t:13s}: IC clusterizado [{lo_t:.2f}, {hi_t:.2f}]")""")
 
 md("""## C · Modelo de resposta — `P(viu & usou | enviei, cliente, oferta)`
-Treinado nos **tratados** das ondas 0–14; avaliado nas ondas 17–24 (fora do tempo).
-XGBoost com features de cliente + atributos da oferta.""")
-co("""tr_mask = (df.W == 1) & (df.split == 'train')
-te_mask = (df.W == 1) & (df.split == 'test')
+Treinado nos **tratados de bogo/discount** das ondas 0–14; avaliado nas ondas 17–24
+(fora do tempo). XGBoost com features de cliente + atributos da oferta.
+
+**Por que informational fica de fora:** esse tipo não gera evento de resgate, e o
+substituto natural ("comprou após ver") ocorre em **47,6%** dos casos **sem oferta
+alguma** — é atividade basal, não resposta. Misturar os dois no mesmo alvo treinaria
+o modelo em conceitos incomensuráveis: um evento impossível sem a oferta (resgate) e
+outro que acontece sozinho na maior parte das vezes. O efeito de informational é
+medido no bloco D, pelo **gasto contra o grupo de controle**.""")
+co("""tr_mask = (df.W == 1) & (df.split == 'train') & df.y_response.notna()
+te_mask = (df.W == 1) & (df.split == 'test') & df.y_response.notna()
 Xtr, ytr = df.loc[tr_mask, X_CUST + X_OFFER], df.loc[tr_mask, 'y_response']
 Xte, yte = df.loc[te_mask, X_CUST + X_OFFER], df.loc[te_mask, 'y_response']
 
@@ -501,9 +508,10 @@ plt.tight_layout(); plt.savefig(f'{FIG}/09_business_impact.png', bbox_inches='ti
 md("""## Conclusões
 1. **O envio causa incremento líquido** (ATE > 0 mesmo descontando reward), com
    heterogeneidade relevante por tipo (discount > bogo > informational) e por cliente.
-2. O **modelo de resposta** (viu & usou) ranqueia bem fora do tempo, mas a decisão
-   de envio é guiada pelo **CATE líquido** — evita pagar reward a quem compraria de
-   qualquer forma.
+2. O **modelo de resposta** (viu & usou, bogo/discount) ranqueia bem fora do tempo,
+   mas a decisão de envio é guiada pelo **CATE líquido** — evita pagar reward a quem
+   compraria de qualquer forma. Para informational não há alvo de resposta
+   confiável; seu efeito é medido só pelo gasto contra o controle.
 3. A **política** (melhor oferta por cliente; "nenhuma" quando CATE ≤ 0) tem ganho
    apresentado como **range**: piso model-free (realocação de mix por tipo) e teto
    model-based (personalização total, sujeito a winner's curse) — com o ranking

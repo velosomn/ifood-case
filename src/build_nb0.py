@@ -741,13 +741,23 @@ co("""num_cols = ['age','credit_card_limit','account_age_years','n_transactions'
             'total_spend','avg_ticket','n_completed','n_cegas']
 high = print_correlation_matrix(cust, num_cols, corr_max=0.75)""")
 md("""**Leitura:** o par mais forte é **gasto total × ticket médio (0,78)** — o único
-acima de 0,75. Correlação alta significa que as duas variáveis dizem quase a mesma
-coisa, então uma delas provavelmente é dispensável no modelo.
+acima de 0,75. Correlação alta **indica** que as duas variáveis podem estar dizendo
+quase a mesma coisa, o que levanta a suspeita de que uma seja dispensável.
 
-Já o **número de transações praticamente não se relaciona com o ticket médio**
-(−0,06): comprar **muitas vezes** e comprar **caro** são coisas independentes nesta
-base — tem quem compre bastante coisa barata e quem compre pouco e caro. Como
-medem comportamentos diferentes, vale manter as duas.""")
+Dois cuidados na hora de ler este gráfico:
+
+1. **Correlação não é causalidade.** O gráfico mostra que duas variáveis andam
+   juntas, não que uma provoque a outra. Gasto total e ticket médio sobem juntos
+   porque ambos derivam do mesmo comportamento de compra — nenhum causa o outro.
+2. **Correlação alta também não prova redundância.** É uma média geral: pode não
+   valer dentro de subgrupos, e modelos de árvore às vezes usam as duas de formas
+   diferentes. A correlação **sugere** o corte; quem decide é testar o modelo com e
+   sem a variável.
+
+Já o **número de compras praticamente não se relaciona com o ticket médio** (−0,06):
+comprar **muitas vezes** e comprar **caro** são coisas independentes nesta base —
+tem quem compre bastante coisa barata e quem compre pouco e caro. Como medem
+comportamentos diferentes, vale manter as duas.""")
 
 md("""# Identificação do grupo de controle
 A seção anterior mostrou que "completou oferta" não serve para decidir envios: quem

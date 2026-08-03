@@ -194,10 +194,8 @@ Dados **brutos, sem pré-filtro**: se há placeholder ou nulo, o gráfico deve
 deixar isso visível (não escondemos nada antes de plotar).""")
 co("""fig, ax = plt.subplots(2, 2, figsize=(12, 7))
 
-# idade SEM filtrar o placeholder — o pico em 118 tem que aparecer no histograma
+# idade SEM filtrar o placeholder — o pico em 118 aparece sozinho no histograma
 ax[0,0].hist(profile.age, bins=40, color='#4C72B0')
-ax[0,0].axvline(118, color=IFOOD_RED, ls='--', lw=1.2)
-ax[0,0].text(118, ax[0,0].get_ylim()[1]*0.92, ' placeholder\\n 118', color=IFOOD_RED, fontsize=8)
 ax[0,0].set_title('Idade (bruta — sem excluir 118)')
 
 # gênero: nulo vira sua própria barra ('unknown'), não desaparece
@@ -215,8 +213,8 @@ profile.registered_on.dt.year.value_counts().sort_index().plot.bar(ax=ax[1,1], c
 ax[1,1].set_title('Ano de cadastro'); ax[1,1].tick_params(rotation=0)
 plt.tight_layout(); plt.show()""")
 md("""**Leitura:** o histograma de idade expõe o próprio problema — um pico
-isolado em **118**, destacado no gráfico, claramente fora da distribuição normal
-que vai até ~100. Gênero mostra a barra `unknown` (nulo) do tamanho real (12,8%).
+isolado em **118**, claramente separado da distribuição, que vai até ~100.
+Gênero mostra a barra `unknown` (nulo) do tamanho real (12,8%).
 Limite de crédito: o histograma matemático não plota `NaN`, então o título
 declara quantos ficaram de fora — os mesmos 12,8% do gênero. As três pistas
 juntas (idade 118 + gênero nulo + limite nulo) confirmam que é o mesmo grupo de
@@ -706,7 +704,10 @@ co("""def perfil_por_gasto(df, var, bins=5, label=None):
     else:
         key = var
         d[key] = d[key].fillna('Missing').astype(str)
+    # min/max da variável em cada faixa: sem isso os bins aparecem como 0,1,2,3,4
+    # e não dá para saber a que intervalo cada um corresponde
     g = d.groupby(key, observed=True).agg(
+        faixa_min=(var,'min'), faixa_max=(var,'max'),
         n=('total_spend','size'), gasto_medio=('total_spend','mean'),
         ticket_medio=('avg_ticket','mean'), n_transacoes=('n_transactions','mean'))
     fig, ax = plt.subplots(figsize=(7, 3))

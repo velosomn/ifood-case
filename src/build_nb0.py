@@ -501,16 +501,39 @@ ax.set_title('Funil agregado de ofertas'); plt.tight_layout(); plt.show()""")
 md("### Funil por tipo de oferta")
 co("""om = offers.set_index('id')['offer_type'].to_dict()
 tx['offer_type'] = tx['offer_id'].map(om)
-tab = (tx[tx.event.isin(['offer received','offer viewed','offer completed'])]
-       .pivot_table(index='offer_type', columns='event', values='account_id', aggfunc='count', fill_value=0))
-tab['view_rate'] = tab['offer viewed']/tab['offer received']
-tab['completion_rate'] = tab.get('offer completed',0)/tab['offer received']
-tab.round(3)""")
-md("""**Leitura:** ~3/4 das ofertas são vistas; `informational` não tem "completar"
-(por isso completion_rate ~0). A comparação vista×completada por oferta sugere a
-hipótese central do case: **parte das conclusões ocorre sem visualização**
-(recompensa desperdiçada) — quantificado com precisão, via janela temporal, no
-notebook 1.""")
+ETAPAS = ['offer received', 'offer viewed', 'offer completed']
+tab = (tx[tx.event.isin(ETAPAS)]
+       .pivot_table(index='offer_type', columns='event', values='account_id',
+                    aggfunc='count', fill_value=0)
+       .reindex(columns=ETAPAS, fill_value=0)
+       .loc[['bogo', 'discount', 'informational']])
+
+fig, ax = plt.subplots(figsize=(9, 4))
+x = np.arange(len(tab)); w = 0.26
+cores = ['#4C72B0', '#2E7D32', IFOOD_RED]
+for k, (etapa, cor) in enumerate(zip(ETAPAS, cores)):
+    b = ax.bar(x + (k-1)*w, tab[etapa], w, label=etapa, color=cor)
+    ax.bar_label(b, fmt='%d', fontsize=8, padding=2)
+ax.set_xticks(x); ax.set_xticklabels(tab.index)
+ax.set_xlabel('offer_type'); ax.set_ylabel('nº de eventos')
+ax.set_title('Funil por tipo de oferta (contagem bruta de eventos)')
+ax.legend(title='event', fontsize=8)
+ax.margins(y=0.12)
+plt.tight_layout(); plt.show()
+
+vr = tab['offer viewed'] / tab['offer received']
+cr = tab['offer completed'] / tab['offer received']
+for t in tab.index:
+    print(f'{t:14s}: visualização {vr[t]:5.1%} | conclusão {cr[t]:5.1%}')""")
+md("""**Leitura:** a barra de conclusão **não existe** para `informational` — é a
+evidência visual de que esse tipo não gera evento de resgate (sem gasto mínimo, sem
+desconto). Entre os outros dois, o padrão se inverte: **bogo é mais visto** (83,4%
+vs 70,2%) mas **discount é mais completado** (58,6% vs 51,4%).
+
+Esse cruzamento é a primeira pista do achado central: se discount converte mais
+apesar de ser menos visto, parte das conclusões **não depende da visualização** —
+ou seja, há resgate sem que a oferta tenha influenciado a compra. A quantificação
+exata, usando a janela de validade e a ordem dos eventos, vem na seção seguinte.""")
 
 md("""## Recompensa desperdiçada: completou depois de ver, ou sem nunca ter visto?
 Recorte em **bogo e discount** (informational não tem evento de conclusão). Aqui

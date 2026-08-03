@@ -142,7 +142,10 @@ co("""meta = pd.DataFrame({'dtype': profile.dtypes.astype(str),
                      'missing_%': (profile.isna().mean()*100).round(2)})
 meta""")
 
-md("### O placeholder de idade (`age == 118`)")
+md("""### A idade 118 é um valor de preenchimento (*placeholder*)
+Um **placeholder** é um valor que o sistema grava quando não tem a informação real,
+em vez de deixar o campo vazio. Ele se disfarça de dado verdadeiro — parece uma
+idade, mas não é. Abaixo, a evidência de que 118 é um desses casos.""")
 co("""print('clientes com age==118:', (profile.age==118).sum())
 print('desses, gender nulo :', profile.loc[profile.age==118,'gender'].isna().mean())
 print('desses, limite nulo :', profile.loc[profile.age==118,'credit_card_limit'].isna().mean())
@@ -737,15 +740,27 @@ md("# Correlações entre variáveis numéricas (nível cliente)")
 co("""num_cols = ['age','credit_card_limit','account_age_years','n_transactions',
             'total_spend','avg_ticket','n_completed','n_cegas']
 high = print_correlation_matrix(cust, num_cols, corr_max=0.75)""")
-md("""**Leitura:** o par mais forte é **`total_spend` × `avg_ticket` (0,78)** — único
-acima do corte de 0,75, candidato natural a redução na feature selection. Já
-`n_transactions` é praticamente ortogonal ao ticket (−0,06): volume e valor por
-compra são dimensões independentes aqui, então vale manter as duas.""")
+md("""**Leitura:** o par mais forte é **gasto total × ticket médio (0,78)** — o único
+acima de 0,75. Correlação alta significa que as duas variáveis dizem quase a mesma
+coisa, então uma delas provavelmente é dispensável no modelo.
+
+Já o **número de transações praticamente não se relaciona com o ticket médio**
+(−0,06): comprar **muitas vezes** e comprar **caro** são coisas independentes nesta
+base — tem quem compre bastante coisa barata e quem compre pouco e caro. Como
+medem comportamentos diferentes, vale manter as duas.""")
 
 md("""# Identificação do grupo de controle
-O item anterior mostrou que precisamos de um contrafactual. A cadência **em lote**
-descoberta no overview de transações abre essa porta: se as ofertas saem em ondas,
-alguém pode não ter recebido em uma dada onda — e esse alguém serve de comparação.""")
+A seção anterior mostrou que "completou oferta" não serve para decidir envios: quem
+gasta muito completa de qualquer jeito. Para saber se a oferta **fez diferença**,
+seria preciso comparar o mesmo cliente nas duas situações — com e sem oferta. Isso é
+impossível: ninguém vive as duas ao mesmo tempo.
+
+A saída é encontrar um **grupo de comparação**: pessoas parecidas que **não**
+receberam oferta. O que elas fizeram é a melhor estimativa do que os outros teriam
+feito sem receber nada.
+
+E aqui entra a descoberta das **ondas**: como as ofertas saem em lotes, em cada onda
+sempre sobra gente que não recebeu nada. Esse é o nosso grupo de comparação.""")
 co("""ondas = sorted(rec.t_recv.unique())
 todos = set(profile.account_id) if 'account_id' in profile.columns else set(profile.id)
 linhas = []
@@ -770,10 +785,14 @@ ax.set_xlabel('onda (dia do teste)'); ax.set_ylabel('clientes')
 ax.set_title('Cada onda deixa de fora ~25% da base — o grupo de controle')
 ax.legend(fontsize=8); plt.tight_layout(); plt.show()""")
 
-md("""### O controle é comparável aos tratados? (balance check)
-Ter um grupo sem oferta não basta: ele só serve como contrafactual se for
-**parecido** com quem recebeu. Comparamos características medidas **antes** da onda
-— se o envio foi essencialmente aleatório, as médias devem bater.""")
+md("""### Os dois grupos são parecidos? (*balance check*)
+Ter um grupo sem oferta não basta — ele precisa ser **parecido** com quem recebeu.
+Se por acaso as ofertas tivessem ido só para os melhores clientes, a comparação
+ficaria injusta: eles gastariam mais de qualquer forma, e a gente creditaria isso à
+oferta.
+
+O teste (chamado de *balance check*) é simples: comparar como os dois grupos eram
+**antes** do envio. Se forem parecidos, a comparação é justa.""")
 co("""W_CHECK = 17.0   # onda com histórico prévio suficiente para comparar
 recebeu = set(rec.loc[rec.t_recv == W_CHECK, 'account_id'])
 vigente = set(rec.loc[(rec.t_recv < W_CHECK) & (rec.t_end > W_CHECK), 'account_id'])
@@ -801,49 +820,57 @@ Descontando quem ainda tem oferta anterior vigente, sobra um **controle limpo** 
 vai de 4.350 (onda 0, a mais limpa por não haver passado) a ~1,2 mil nas ondas
 finais — quando a cadência acelera e mais gente está sob oferta ativa.
 
-O balance check é o que valida o desenho: tratados e controle têm **gasto prévio
-(R$ 51,78 vs 47,57), número de transações (4,11 vs 3,77), idade (54,4 vs 55,0) e
-taxa de perfil incompleto (12,9% vs 13,8%) praticamente iguais**. Nenhuma diferença
-sugere seleção — o envio se comporta como **aleatorizado**, o que habilita comparar
-os dois grupos diretamente.
+E os dois grupos são **praticamente idênticos** antes do envio: gasto prévio
+(R$ 51,78 vs 47,57), número de compras (4,11 vs 3,77), idade (54,4 vs 55,0) e taxa
+de cadastro incompleto (12,9% vs 13,8%). Nada indica que as ofertas foram
+direcionadas a um perfil específico — na prática, é **como se tivessem sido
+sorteadas**. Por isso podemos comparar os dois grupos diretamente.
 
 É esse achado que torna o case tratável: sem ele, não haveria como separar a venda
 que a oferta *causou* daquela que aconteceria de qualquer forma.""")
 
 md("""# Conclusões da EDA (dados brutos)
-1. **Qualidade:** `age==118` = perfil incompleto (~12,8%) ≡ nulos de gênero/limite →
-   flag + imputação no processing. Sem concentração temporal: é falha estrutural de
-   cadastro, não lote/migração pontual.
-2. **Ofertas:** 4 BOGO, 4 discount, 2 informational; duração 3–10 dias define a
-   **janela de atribuição** do processing; `informational` não tem "completar".
-   Economia distinta: BOGO paga ~1x o gasto destravado, discount ~4x.
-3. **Recompensa desperdiçada (achado central):** das 33.631 conclusões atribuídas a
-   ofertas bogo/discount, só **70,4%** ocorreram após o cliente ver a oferta.
-   **29,6%** dos cupons foram pagos sem influenciar a compra (17,0% nunca vistos +
-   12,5% vistos só depois do resgate). Discount desperdiça mais que BOGO (11,3% vs
-   7,5% das enviadas). *Nota: 33.631 atribuições vs 33.579 eventos brutos de
-   `offer completed` — a diferença vem de ofertas repetidas com janelas sobrepostas,
-   em que um mesmo resgate é atribuído a mais de um envio.*
-4. **Conclusão de oferta acompanha o gasto** (15% no menor quintil → **100%** no
-   maior), assim como as conclusões às cegas → o alvo de decisão precisa ser o
-   **efeito incremental do envio**, o que exige grupo de controle.
+1. **Qualidade dos dados:** a idade 118 (~12,8% da base) não é idade real — é o
+   valor que o sistema grava quando não sabe. Coincide exatamente com quem não tem
+   gênero nem limite de cartão. Esses cadastros aparecem de forma constante ao longo
+   de todo o período, ou seja, é uma falha permanente no fluxo de cadastro, não uma
+   importação de dados pontual. Serão marcados com uma flag e preenchidos no
+   processamento.
+2. **As ofertas:** 4 BOGO, 4 discount, 2 informational; validade de 3 a 10 dias — é
+   esse prazo que define até quando um resgate conta como resposta à oferta.
+   `informational` não tem "completar". A economia difere muito: BOGO devolve ~R$1
+   para cada R$1 de compra destravada; discount devolve ~R$1 para cada R$4.
+3. **Cupom pago sem efeito (achado central):** das 33.631 conclusões de
+   bogo/discount, só **70,4%** aconteceram depois de o cliente ver a oferta. Nas
+   outras **29,6%**, o desconto saiu do caixa sem ter influenciado a compra (17,0%
+   nunca foram vistas + 12,5% vistas só depois do resgate). Discount desperdiça mais
+   que BOGO (11,3% vs 7,5% dos envios). *Detalhe: 33.631 é maior que os 33.579
+   eventos de resgate porque, quando o cliente recebe a mesma oferta duas vezes com
+   prazos que se cruzam, um resgate é contado nos dois envios.*
+4. **"Completou oferta" não serve para decidir envios:** a taxa sobe de 15% entre os
+   que menos gastam para **100%** entre os que mais gastam — e os resgates sem ter
+   visto crescem junto. Otimizar isso seria mirar quem já compraria. O alvo tem que
+   ser a **venda a mais gerada pelo envio**, o que exige o grupo de comparação.
 5. **Perfil dos segmentos:** o **limite de crédito** é o que melhor acompanha o gasto
-   (R$ 64 → R$ 182, monotônico). Idade e idade da conta sobem até o meio da
-   distribuição e depois **estabilizam ou caem** — relação não linear. Entre as
-   comportamentais, só `total_spend` × `avg_ticket` passa de 0,75 de correlação;
-   `n_transactions` é ortogonal ao ticket (−0,06).
-6. **Timing:** envios são **em lote** em 6 dias (0,7,14,17,21,24), com cadência que
-   **acelera** (de semanal para cada 3–4 dias); cada envio gera uma onda decrescente
-   de visualização/conclusão — relevante para timing de campanha.
-7. **Existe grupo de controle utilizável (viabiliza todo o resto):** cada onda deixa
-   **~25% da base sem oferta**; descontando quem tem oferta anterior vigente, o
-   controle limpo vai de 4.350 (onda 0) a ~1,2 mil (ondas finais). O balance check na
-   onda 17 mostra tratados e controle equivalentes em gasto prévio, transações, idade
-   e perfil incompleto → **o envio se comporta como aleatorizado**.
+   (R$ 64 → R$ 182, sempre subindo). Idade e idade da conta sobem até o meio e depois
+   **param ou caem** — não é uma relação simples. Gasto total e ticket médio dizem
+   quase a mesma coisa (correlação 0,78); já o número de compras é independente do
+   ticket, então vale manter os dois.
+6. **Quando as ofertas são enviadas:** não é contínuo — saem em **6 lotes** (dias
+   0, 7, 14, 17, 21 e 24), e o ritmo **acelera** ao longo do teste (começa semanal e
+   passa a cada 3–4 dias). Cada lote provoca uma onda de visualizações e resgates que
+   vai diminuindo nos dias seguintes.
+7. **Existe um grupo de comparação (é o que viabiliza todo o resto):** em cada lote,
+   **~25% da base não recebe nada**. Tirando quem ainda tem oferta anterior valendo,
+   sobram de 4.350 pessoas (no primeiro lote) a ~1,2 mil (nos últimos). E esse grupo é
+   **estatisticamente igual** a quem recebeu, em gasto anterior, número de compras,
+   idade e cadastro incompleto — ou seja, os envios se comportam **como se tivessem
+   sido sorteados**, o que torna a comparação confiável.
 
-→ Próximo passo: `1_data_processing.ipynb` — formalizar o grupo de controle do item 7
-em uma tabela (cliente × onda) com features estritamente pré-onda, para medir no
-`2_modeling.ipynb` o efeito incremental exigido pelo item 4.
+→ **Próximo passo:** o `1_data_processing.ipynb` organiza tudo isso numa tabela com
+uma linha por cliente e por lote, usando apenas informações **anteriores** a cada
+envio. Com ela, o `2_modeling.ipynb` consegue finalmente medir quanto de venda cada
+envio realmente gerou.
 """)
 
 nb["cells"] = c

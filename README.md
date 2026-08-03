@@ -4,33 +4,38 @@ Solução baseada em dados para decidir **qual oferta enviar para cada cliente**
 (incluindo *nenhuma*), maximizando o **valor incremental líquido** — a venda
 adicional que o envio causa, descontado o custo do cupom.
 
-> **TL;DR** — Os envios históricos ocorrem em 6 ondas e ~25% da base não recebe
-> nada em cada onda, formando um **grupo de controle** com características
-> balanceadas (~aleatorizado). Isso permite medir o efeito **causal** do envio:
-> **R$ 9,21 de venda incremental líquida por cliente** (IC 95% [8,45–9,90], 7 dias).
-> Uma política que escolhe a melhor oferta por cliente projeta
-> **+20% de valor incremental** sobre "enviar a todos" já no cenário conservador
-> (piso model-free), com upside a validar em A/B — e mostra que **apenas 10% dos
-> clientes recebiam hoje sua melhor oferta**.
+> **Em resumo** — As ofertas foram enviadas em 6 lotes, e em cada um deles **cerca
+> de 25% dos clientes não receberam nada**. Esse grupo funciona como comparação: ele
+> mostra o que teria acontecido sem o envio. Como os dois grupos são estatisticamente
+> parecidos, dá para medir quanto o envio realmente gerou de venda:
+> **R$ 9,21 a mais por cliente em 7 dias**, já descontado o custo do cupom.
+>
+> Enviando a oferta certa para cada pessoa, a projeção é de **+20% de retorno** em
+> relação a "enviar para todos" — e isso no cenário conservador. Hoje, **apenas 10%
+> dos clientes recebem a oferta que faz mais sentido para eles**.
 
 ---
 
-## 🧠 Enquadramento
+## 🧠 Como o problema foi enquadrado
 
-A pergunta *"qual oferta enviar?"* é **causal**: só vale enviar se o envio **muda
-o comportamento** do cliente. Prever quem completa a oferta ranqueia quem já ia
-comprar — e ~**30% dos cupons resgatados são pagos sem o cliente ter visto a
-oferta antes da compra** (recompensa desperdiçada).
+A pergunta *"qual oferta enviar?"* não é sobre **quem usa cupom** — é sobre **em quem
+o cupom faz diferença**. São coisas diferentes: quem compra muito usa cupom de
+qualquer jeito, então mirar nessas pessoas é pagar desconto por uma venda que já
+aconteceria.
 
-| Decisão | Escolha | Alternativa descartada |
+Os dados confirmam o problema: **~30% dos cupons resgatados foram pagos sem o
+cliente ter visto a oferta antes de comprar**. O desconto saiu do caixa sem ter
+influenciado nada.
+
+| Decisão | O que foi escolhido | O que foi descartado, e por quê |
 |---|---|---|
-| **Tratamento** | `W` = **envio** da oferta (a alavanca que o negócio controla) | "Visualizou": é pós-tratamento (mediador) → viés de seleção |
-| **Controle** | Clientes **sem envio na onda e sem oferta anterior ativa** (controle limpo; balance check favorável) | Quase-experimento visto/não-visto |
-| **Unidade** | **(cliente × onda)** — máx. 1 oferta por cliente por onda (verificado) | (cliente × oferta): sem controle, 56% de janelas sobrepostas |
-| **Target resposta** | `y_response` = **viu E usou** (`t_view ≤ t_comp` na validade), **só bogo/discount** | `completed` puro: inclui auto-resgate (16% das instâncias). Alvo para informational: "comprou após ver" ocorre 47,6% das vezes **sem oferta alguma** — mede atividade basal, não resposta |
-| **Outcome causal** | Gasto em **horizontes fixos** (3–10d) líquido do reward | Janela da oferta: sem equivalente no controle |
-| **Features** | Estritamente **pré-onda** (`t <` dia do envio) | Agregados do período: vazamento temporal |
-| **Validação** | **Split temporal** (treino ondas 0–14, teste 17–24) + Qini/uplift realizado | Split aleatório; AUC como métrica de política |
+| **O que estamos medindo o efeito?** | O **envio** da oferta — é a única coisa que a empresa controla | "Ter visualizado": quem abre a notificação já é mais engajado, então a comparação ficaria enviesada. Além disso, ninguém controla se o cliente vai abrir |
+| **Grupo de comparação** | Clientes que **não receberam nada naquele lote** e também não tinham oferta anterior ainda valendo | Usar todos os que não receberam: parte deles ainda estava sob efeito de uma oferta anterior |
+| **Uma linha da tabela representa** | Um **cliente em um lote de envio** (cada cliente recebe no máximo 1 oferta por lote) | Uma linha por oferta: não haveria linhas de quem não recebeu, e 56% das ofertas têm prazos que se cruzam |
+| **O que conta como "respondeu"** | **Viu e depois usou** o cupom, dentro do prazo — só para BOGO e discount | Só "usou": inclui quem resgatou sem nunca ter visto (16% dos envios). Para as informacionais não há alvo confiável: "comprou depois de ver" acontece 47,6% das vezes mesmo sem oferta |
+| **O que mede o resultado financeiro** | **Gasto em janelas de tempo fixas** (3 a 10 dias), descontando o cupom | Gasto na validade da oferta: quem não recebeu oferta não tem validade, então não daria para comparar |
+| **Informações usadas para prever** | Apenas o que aconteceu **antes** de cada envio | Usar dados do período todo: seria "prever" com informação do futuro |
+| **Como o modelo é testado** | Treina nos lotes antigos, testa nos seguintes | Sortear as linhas aleatoriamente: misturaria passado e futuro e inflaria o resultado |
 
 ---
 
@@ -44,7 +49,7 @@ ifood-case/
 ├── notebooks/
 │   ├── 0_eda.ipynb               # EDA dos dados brutos
 │   ├── 1_data_processing.ipynb   # PySpark: dataset unificado (roda local e no Databricks)
-│   └── 2_modeling.ipynb          # ATE, modelo de resposta, CATE e política
+│   └── 2_modeling.ipynb          # efeito do envio, modelo e política de ofertas
 ├── src/                   # builders dos notebooks + métricas de uplift
 ├── presentation/          # deck 5 slides (.pptx + .md) + figuras
 ├── README.md
@@ -84,45 +89,55 @@ O notebook 0 (EDA) é local e lê os JSONs de `data/raw/`.
 
 ---
 
-## 📊 Principais resultados (ondas de teste, fora do tempo)
+## 📊 Principais resultados
 
-**Dados:** 10 ofertas · 17.000 clientes · ~306k eventos · 76.277 envios em 6 ondas.
+Todos os números abaixo vêm dos **lotes finais**, que o modelo nunca tinha visto.
 
-- **Grupo de controle real:** ~4,3k clientes/onda sem envio; controle limpo
-  balanceado em gasto prévio, idade e perfil → envio ~aleatorizado.
-- **Efeito causal do envio (ATE):** **R$ 9,21**/cliente em 7 dias, líquido do
-  reward [8,45–9,90]; robusto a ajuste de regressão (8,94). Por tipo:
-  **discount 11,63 > bogo 8,65 > informational 5,45**.
-- **Desperdício:** 9,4% das ofertas completadas **sem visualização** + 6,9%
-  vistas só depois do resgate → ~30% dos cupons pagos sem efeito na compra.
-- **Modelo de resposta** (viu & usou, bogo/discount): AUC **0,806** fora do tempo.
-- **CATE/política:** validação *model-free* por faixas do score — uplift
-  realizado **monotônico** (top 20%: R$ 21,15 → bottom 20%: −R$ 0,10);
-  só **10%** dos clientes recebiam sua melhor oferta.
-- **Projeção (1M de envios):** enviar a todos **R$ 10,3M** → política
-  **R$ 12,3M (+20%, piso model-free)**; teto model-based ~R$ 29M
-  (**winner's curse** explicitado — validar em A/B).
+**Base:** 10 ofertas · 17.000 clientes · ~306 mil eventos · 76.277 envios em 6 lotes.
+
+- **O grupo de comparação existe e é confiável:** ~4,3 mil clientes por lote sem
+  receber nada, com gasto anterior, idade e perfil equivalentes a quem recebeu.
+- **Quanto o envio gera:** **R$ 9,21 de venda a mais por cliente** em 7 dias, já
+  descontado o cupom (margem de erro: R$ 8,45 a R$ 9,90). Por tipo de oferta:
+  **discount R$ 11,63 > BOGO R$ 8,65 > informacional R$ 5,45**.
+- **Desperdício:** 9,4% dos cupons foram usados **sem terem sido vistos** e outros
+  6,9% foram vistos só depois do resgate — ~30% do desconto pago sem efeito.
+- **Modelo de resposta** (viu e usou, BOGO/discount): acerta o ranqueamento em
+  **80,6%** dos casos, testado em lotes futuros.
+- **O modelo separa bem quem vale a pena:** entre os 20% mais bem pontuados, o
+  envio gerou **R$ 21,15** por cliente; entre os 20% piores, **nada** (−R$ 0,10).
+  E hoje **só 10% das pessoas recebem a oferta mais adequada a elas**.
+- **Projeção para 1 milhão de envios:** enviar para todos rende **R$ 10,3M**; com a
+  política, **R$ 12,3M (+20%)** no cenário conservador. Há um potencial maior
+  (~R$ 29M) se a personalização completa se confirmar, mas esse número vem do
+  modelo e **precisa ser validado num teste A/B** antes de ser prometido.
 
 ---
 
 ## 📌 Premissas e limitações
 
-1. `age == 118` é sentinela de perfil incompleto (100% coincidente com nulos de
-   gênero/limite) → flag + imputação.
-2. Janela de validade = `[t_recv, t_recv + duration]`; `time_since_test_start` em dias.
-3. `offer completed` = cupom usado (resgate ao atingir `min_value` na validade);
-   sem visualização anterior é auto-resgate → excluído do target de resposta.
-4. **Envio ~aleatorizado por onda** é premissa central (suportada pelo balance
-   check); validação definitiva exige **A/B test** com holdout.
-5. `reward_paid` é da janela da oferta vs outcome em 7d — aproximação conservadora.
-6. Ondas de teste têm controle limpo menor (1,2–1,4k) → ICs mais largos.
-7. Base é um recorte socioeconômico específico (limites R$30–120k, público maduro)
-   → generalização para outros estratos requer cautela.
+1. A idade 118 não é idade real — é o valor gravado quando o cadastro está
+   incompleto (coincide 100% com quem não tem gênero nem limite informados).
+2. Uma oferta vale de quando é recebida até o fim do seu prazo (3 a 10 dias).
+3. O evento "oferta completada" significa que o cliente atingiu o gasto mínimo e o
+   desconto foi pago. Quando isso acontece **sem ele ter visto a oferta**, foi
+   resgate automático — por isso esses casos não contam como resposta.
+4. **A premissa mais importante:** assumimos que os envios foram feitos sem
+   privilegiar nenhum perfil. Os dados sustentam isso (os grupos são equivalentes),
+   mas a confirmação definitiva exige um **teste A/B** de verdade.
+5. O custo do cupom é contado dentro da validade da oferta, enquanto a venda é
+   medida em 7 dias — pequeno desalinhamento, que joga a favor da cautela.
+6. Nos lotes finais o grupo de comparação é menor (1,2 a 1,4 mil pessoas), então a
+   margem de erro aumenta.
+7. Esta base tem um perfil específico (limites de R$30 a 120 mil, público mais
+   maduro). Aplicar as conclusões a outros públicos exige cuidado.
 
 ## 🚀 Próximos passos
 
-1. **A/B test** com holdout global para validar ATE e o teto da personalização.
-2. Alocação sob **restrição de orçamento** (knapsack uplift/custo de reward).
-3. Otimização de **timing e canal** do envio.
-4. Produção: re-treino por onda, monitoramento de calibração e drift, score no
-   motor de campanhas de CRM.
+1. **Teste A/B** com um grupo separado de verdade, para confirmar o efeito medido e
+   o potencial da personalização completa.
+2. Distribuir os cupons respeitando um **orçamento** — priorizar quem dá mais
+   retorno por real gasto.
+3. Otimizar **quando** e **por qual canal** enviar.
+4. Colocar em produção: retreinar a cada campanha, monitorar se o modelo continua
+   acertando, e integrar ao sistema de campanhas.

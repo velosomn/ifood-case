@@ -84,7 +84,7 @@ def content_slide(kicker, title):
 # ------------------------------------------------------------- Slide 1 capa
 s = prs.slides.add_slide(BLANK)
 band(s)
-add_text(s, 0.9, 2.0, 11.5, 0.5, "iFood · Data Science — Direcionamento de Cupons", 18, RED, bold=True)
+add_text(s, 0.9, 2.0, 11.5, 0.5, "Case iFood", 18, RED, bold=True)
 add_text(s, 0.9, 2.7, 11.8, 1.8,
          "O problema não é quanto se gasta em cupom.\nÉ para quem se manda.", 38, DARK, bold=True)
 add_text(s, 0.9, 4.8, 11.5, 1.2,

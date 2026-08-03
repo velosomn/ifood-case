@@ -1,4 +1,4 @@
-# iFood · Direcionamento de Cupons — Apresentação (5 slides)
+# Case iFood — Apresentação (5 slides)
 
 > Versão em markdown do deck (`ifood_case.pptx`). Público: lideranças de negócio.
 

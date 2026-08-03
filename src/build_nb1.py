@@ -226,9 +226,15 @@ tx_after_view = (attrib.filter("offer_type = 'informational' and viewed = 1")
 
 attrib = attrib.join(tx_after_view, ["account_id", "wave"], "left") \\
                .fillna({"n_tx_after_view": 0})
+
+# alvo por tipo: bogo/discount = viu antes de usar; informational = viu e transacionou
+# depois (não existe 'completed' para informational, então view_before_comp seria 0)
+alvo = (F.when(F.col("offer_type") == "informational",
+               ((F.col("viewed") == 1) & (F.col("n_tx_after_view") > 0)).cast("int"))
+         .otherwise(F.col("view_before_comp")))
 attrib.groupBy("offer_type").agg(
     F.mean("viewed").alias("view_rate"), F.mean("completed").alias("comp_rate"),
-    F.mean("view_before_comp").alias("viu_e_usou")).show()""")
+    F.mean(alvo).alias("y_response")).show()""")
 
 md("""## Outcomes em horizontes fixos (todas as linhas, tratado e controle)
 Gasto e nº de transações em `[onda, onda+h]` para h ∈ {3,4,5,7,10} — janelas

@@ -22,3 +22,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs de crash da JVM (Spark local)
+hs_err_pid*.log
+replay_pid*.log

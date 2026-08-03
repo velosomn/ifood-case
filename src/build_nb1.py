@@ -62,8 +62,16 @@ else:
     # Windows/local: aponta os workers Python do Spark para o interpretador atual
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
-    # heap do driver precisa ser definido ANTES da JVM subir (config no builder é ignorada)
-    os.environ.setdefault("PYSPARK_SUBMIT_ARGS", "--driver-memory 4g pyspark-shell")
+    # Heap do driver precisa ser definido ANTES da JVM subir (config no builder é
+    # ignorada). Ajustado à memória livre da máquina: pedir mais do que o sistema
+    # tem disponível faz a JVM morrer no meio do job.
+    try:
+        import psutil
+        livre_gb = psutil.virtual_memory().available / 1e9
+        heap = "3g" if livre_gb > 5 else "2g"
+    except ImportError:
+        heap = "2g"
+    os.environ.setdefault("PYSPARK_SUBMIT_ARGS", f"--driver-memory {heap} pyspark-shell")
     spark = (SparkSession.builder.master("local[*]").appName("ifood-nb1")
              .config("spark.sql.shuffle.partitions", "8")
              .config("spark.ui.enabled", "false").getOrCreate())
@@ -335,6 +343,13 @@ co("""modeling = (grid
     .withColumn("y_net_window",
                 F.when(F.col("W") == 1, F.col("spend_window") - F.col("reward_paid"))))
 
+# A tabela final é pequena (102k linhas), mas seu plano tem ~8 joins encadeados.
+# Sem cache, CADA ação seguinte (count, show, sanity checks, escrita) reexecuta a
+# cadeia inteira — o que estoura a memória do driver local. Com cache, calcula uma
+# vez só. (No serverless o cache não é suportado; lá o engine já otimiza sozinho.)
+if not IS_DATABRICKS:
+    modeling = modeling.cache()
+
 n_rows = modeling.count()
 print("tabela de modelagem:", n_rows, "linhas x", len(modeling.columns), "colunas")
 modeling.groupBy("W").agg(
@@ -342,6 +357,48 @@ modeling.groupBy("W").agg(
     F.count("y_response").alias("n_com_alvo"),   # exclui informational (nulo)
     F.mean("y_response").alias("y_resp"),
     F.mean("spend_h7").alias("spend_h7")).show()""")
+
+md("""### As colunas da tabela final
+As 53 colunas se dividem em cinco papéis. Note que a tabela guarda **os dois
+momentos**: o que se sabia *antes* do envio (usado para prever) e o que aconteceu
+*depois* (o resultado a medir).""")
+co("""GRUPOS = {
+    "1. CHAVE — identifica a linha": ["account_id", "wave"],
+    "2. TRATAMENTO — o que a empresa fez": ["W", "control_clean", "n_active_offers"],
+    "3. A OFERTA enviada (nulo no controle)":
+        ["offer_id", "offer_type", "min_value", "discount_value", "duration",
+         "n_channels"] + [f"ch_{c}" for c in CHANNELS],
+    "4. ANTES do envio — usado para PREVER":
+        ["age", "gender", "credit_card_limit", "incomplete_profile", "account_age_days",
+         "has_history", "n_tx_pre", "spend_pre", "avg_ticket_pre", "active_days_pre",
+         "recency_days", "n_received_pre", "n_viewed_pre", "n_completed_pre",
+         "view_rate_pre", "comp_rate_pre"],
+    "5. DEPOIS do envio — o RESULTADO a medir":
+        ["first_view", "first_comp", "viewed", "completed", "view_before_comp",
+         "reward_paid", "n_tx_after_view", "spend_window", "n_tx_window"]
+        + [f"spend_h{h}" for h in HORIZONS] + [f"n_tx_h{h}" for h in HORIZONS],
+    "6. ALVOS": ["y_response", "y_net_window"],
+}
+vistas = set()
+for titulo, cols in GRUPOS.items():
+    cols = [c for c in cols if c in modeling.columns]
+    vistas.update(cols)
+    print(f"{titulo}  [{len(cols)}]")
+    print("   " + ", ".join(cols) + "\\n")
+faltando = [c for c in modeling.columns if c not in vistas]
+print("colunas não classificadas:", faltando if faltando else "nenhuma")""")
+
+md("""### Amostra: uma linha tratada e uma de controle
+Lado a lado fica claro o que muda entre os dois grupos — o controle não tem oferta
+nem nada relacionado a ela, mas **tem** o gasto posterior, que é o que permite a
+comparação.""")
+co("""COLS_AMOSTRA = ["account_id", "wave", "W", "control_clean", "offer_type",
+                "spend_pre", "n_tx_pre", "viewed", "completed",
+                "reward_paid", "spend_h7", "y_response"]
+print("--- linha TRATADA (recebeu oferta) ---")
+modeling.filter("W = 1 and wave = 17").select(COLS_AMOSTRA).show(3, truncate=12)
+print("--- linha de CONTROLE (não recebeu) ---")
+modeling.filter("control_clean = 1 and wave = 17").select(COLS_AMOSTRA).show(3, truncate=12)""")
 
 md("""## Sanity checks
 1. Batem com a EDA estrutural (funil com ordem, controle limpo por onda)?

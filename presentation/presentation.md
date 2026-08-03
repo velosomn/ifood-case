@@ -4,57 +4,70 @@
 
 ---
 
-## Slide 1 — A oferta certa, para o cliente certo — e só quando ela gera venda nova
+## Slide 1 — O problema não é quanto se gasta em cupom. É para quem se manda.
 
-Medimos o **efeito real de cada envio** (venda incremental, descontado o cupom) e
-transformamos isso numa **política de envio por cliente**.
+Medimos o quanto cada envio realmente gera de venda nova — e descobrimos que
+**9 em cada 10 clientes recebem a oferta errada**.
 
-*Base: 17 mil clientes · 306 mil eventos · 76 mil envios em 6 campanhas.*
+*17 mil clientes · 306 mil eventos · 76 mil envios em 6 campanhas · 30 dias.*
 
 ---
 
-## Slide 2 — O problema: parte do orçamento de cupons não gera venda nova
+## Slide 2 — O problema: quase um terço do desconto sai do caixa sem gerar nada
 
 ![funil](figures/10_funnel.png)
 
-- **~30% dos cupons pagos não influenciaram a compra**: o cliente atingiu o valor
-  mínimo e o cupom foi resgatado **sem que ele tivesse visto a oferta** — a compra
-  aconteceria de qualquer forma.
-- Enviar a mesma oferta para todos ignora quem responde e quem não.
+> **30% dos cupons são usados sem o cliente ter visto a oferta antes.**
+
+O cliente faz uma compra normal, atinge o valor mínimo sem saber que havia uma
+oferta — e o sistema desconta automaticamente. É uma venda que aconteceria de
+qualquer forma, só que mais barata para o cliente e mais cara para a empresa.
 
 ---
 
-## Slide 3 — Quanto vale um envio: R$ 9 de venda nova, já descontado o cupom
+## Slide 3 — Enviar compensa, mas o efeito depende muito da oferta
 
-![efeito causal](figures/05_ate.png)
+![efeito do envio](figures/05_ate.png)
 
-Em cada campanha, ~25% dos clientes **não receberam oferta** — um grupo de
-comparação equivalente aos demais. A diferença entre os grupos é a venda que o
-envio **causou**: **R$ 9,21 por cliente em 7 dias** (IC 8,45–9,90).
-Desconto rende mais que BOGO e que ofertas informativas.
+**Como medimos:** em cada campanha, 25% dos clientes não receberam nada. Esse grupo
+mostra o que teria acontecido sem o envio; a diferença entre os dois grupos é a
+venda que o envio causou.
+
+> **R$ 9,21 de venda nova por cliente, em 7 dias** — já descontado o custo do cupom.
+> Desconto rende 34% mais que BOGO.
 
 ---
 
-## Slide 4 — A solução: uma política por cliente — a melhor oferta, ou nenhuma
+## Slide 4 — Dá para saber, antes de enviar, em quem a oferta faz diferença
 
 ![validação](figures/08_policy_validation.png)
 
-Testado em campanhas **futuras** (fora do treino): o grupo apontado como
-prioritário gerou **R$ 21** de venda incremental por cliente; o de menor
-prioridade, **zero**.
+Testado em campanhas **futuras**: o modelo ordena os clientes por quanto a oferta
+deve render em cada um. No grupo apontado como prioridade, o envio gerou **R$ 21**
+por cliente. No último grupo, **zero**.
 
-> **Hoje, só 10% dos clientes recebem a sua melhor oferta.**
+> **Hoje, só 10% recebem a oferta certa para eles.**
+> O maior ganho não é enviar menos — é enviar melhor.
 
 ---
 
-## Slide 5 — Impacto: de R$ 10,3M para R$ 12,3M por milhão de envios
+## Slide 5 — A conclusão: com o mesmo orçamento, 20% mais resultado
 
 ![impacto](figures/09_business_impact.png)
 
-- **+R$ 2,0M (+20%)** por 1M de envios já no cenário **conservador**, enviando 5%
-  menos cupons;
-- Potencial de ~R$ 29M com personalização total — número de modelo, a **confirmar
-  em teste controlado (A/B)**.
+### O que aprendemos
 
-**Próximos passos:** teste A/B com grupo de controle · alocação sob orçamento ·
-timing e canal · integração ao motor de campanhas.
+**1. Cupom funciona — mas não para todos.**
+O efeito médio é positivo, porém vai de R$ 21 a zero dependendo da pessoa.
+
+**2. Medir "quem usou o cupom" engana.**
+Quem gasta muito usa cupom de qualquer jeito. Só comparando com quem não recebeu
+dá para saber o que a oferta realmente causou.
+
+**3. O dinheiro está em acertar o alvo.**
+Não em cortar envios: 90% recebem a oferta errada, e corrigir isso rende +20%.
+
+*Por 1 milhão de envios: de R$ 10,3M para R$ 12,3M. Há potencial maior com
+personalização total — número de modelo, a confirmar em teste A/B.*
+
+**Próximo passo:** teste A/B com grupo de controle.

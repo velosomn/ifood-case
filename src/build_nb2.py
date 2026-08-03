@@ -434,14 +434,21 @@ ax.set_title('Uplift realizado por faixa do score da política (teste)')
 plt.tight_layout(); plt.savefig(f'{FIG}/08_policy_validation.png', bbox_inches='tight'); plt.show()""")
 
 md("""### Ganho de realocação de oferta (o coração do "qual oferta enviar")
-A validação por faixas mostra que o score ranqueia bem **entre clientes**, mas não
-mede o ganho de **trocar a oferta** de um mesmo cliente (só observamos a oferta
-enviada). Estimamos a realocação de duas formas:
-- **Piso (model-free):** realocar o mix para o tipo de maior ATE observado
-  (discount) — usa só as diferenças de ATE do bloco B;
-- **Teto (model-based):** CATE da melhor oferta vs CATE da oferta que foi de fato
-  enviada — sujeito a **winner's curse** (argmax de predições ruidosas infla o
-  máximo), por isso tratado como limite superior a validar em A/B.""")
+
+⚠️ **O que a validação por faixas prova — e o que ela não prova.** Ela mostra que o
+score ranqueia bem **entre clientes** (quem responde mais). Ela **não** mede o ganho
+de **trocar a oferta** de um mesmo cliente, porque cada cliente só recebeu uma
+oferta — nunca observamos como ele reagiria às outras nove.
+
+Por isso a realocação é estimada como um intervalo:
+
+- **Piso (conservador):** realocar o mix para o tipo de maior efeito **observado**
+  (discount). Usa só as diferenças medidas no bloco B — milhares de clientes
+  receberam cada tipo, então a comparação é empírica, não extrapolação.
+- **Teto (dependente do modelo):** efeito previsto da melhor oferta vs o da oferta
+  que foi de fato enviada. Sujeito à **maldição do vencedor**: escolher o `argmax`
+  de 10 previsões ruidosas infla sistematicamente o máximo, mesmo quando as ofertas
+  têm efeito idêntico. Por isso é limite superior, a validar em A/B.""")
 co("""tt = df[(df.W == 1) & (df.split == 'test')].copy()
 base_t = m0.predict(tt[X_CUST])
 cate_sent = np.zeros(len(tt))
@@ -497,28 +504,41 @@ print(f"\\n→ ganho positivo em {(ok['ganho_R$'] > 0).sum()}/{len(ok)} células
       f"média ponderada: R$ {w_gain:.2f}/cliente (pooled: R$ {ate_disc - ate_mix:.2f})")""")
 
 md("""### Simulação financeira (projeção por 1 milhão de envios)
-Três cenários: **enviar a todos** (mix atual, realizado model-free nas ondas de
-teste), **política conservadora** (piso: realoca o mix p/ o melhor tipo + corta
-CATE ≤ 0) e **política personalizada** (teto model-based, a validar em A/B).""")
+Três cenários:
+1. **Enviar a todos** com o mix atual — efeito realizado nas ondas de teste;
+2. **Política conservadora (piso)** — realoca o mix para o tipo de maior efeito
+   observado e corta os envios de efeito previsto ≤ 0;
+3. **Política personalizada (teto)** — melhor oferta por cliente, a validar em A/B.
+
+**Quanto de cada cenário depende do modelo?** O piso usa o modelo em um único ponto
+(descartar os ~5% de efeito previsto ≤ 0) — e isso *reduz* a projeção, porque na
+conta simples esses envios ainda contariam pelo efeito médio. O ganho do piso vem de
+uma diferença **medida** (desconto rende mais que BOGO). Já o teto depende
+inteiramente do modelo. A decomposição abaixo torna isso explícito.""")
 co("""POP = 1_000_000
 frac_send = policy.send.mean()
 overall_t = te[te.W == 1]; overall_c = te[te.W == 0]
 up_all = overall_t.y_net_h7.mean() - overall_c.y_net_h7.mean()
 
 val_all = POP * up_all
-val_floor = POP * frac_send * up_all * (1 + gain_floor)
+val_floor_sem_modelo = POP * up_all * (1 + gain_floor)   # só troca o mix
+val_floor = POP * frac_send * up_all * (1 + gain_floor)  # + corta efeito previsto <= 0
 val_ceil = POP * frac_send * np.where(best_t > 0, best_t, 0).mean() / max(cate_sent.mean(), 1e-9) * up_all
 
-print(f"uplift líquido realizado (enviar a todos): R$ {up_all:.2f}/cliente")
-print(f"\\nprojeção por {POP:,} envios possíveis:")
-print(f"  enviar a todos (mix atual)      : R$ {val_all:,.0f}")
-print(f"  política — piso (model-free)    : R$ {val_floor:,.0f}  ({val_floor/val_all-1:+.0%}, {frac_send:.0%} dos envios)")
-print(f"  política — teto (model-based)   : R$ {val_ceil:,.0f}  ({val_ceil/val_all-1:+.0%}) — validar em A/B")
+print(f"efeito realizado (enviar a todos): R$ {up_all:.2f}/cliente\\n")
+print(f"projeção por {POP:,} envios possíveis:")
+print(f"  1. enviar a todos, mix atual         : R$ {val_all:,.0f}")
+print(f"  2. piso conservador                  : R$ {val_floor:,.0f}  ({val_floor/val_all-1:+.0%}, {frac_send:.0%} dos envios)")
+print(f"  3. teto (depende do modelo)          : R$ {val_ceil:,.0f}  ({val_ceil/val_all-1:+.0%}) — validar em A/B")
+print(f"\\nquanto do piso depende do modelo?")
+print(f"  só trocando o mix, sem modelo algum  : R$ {val_floor_sem_modelo:,.0f}  ({val_floor_sem_modelo/val_all-1:+.0%})")
+print(f"  o modelo (corte de efeito <= 0) muda : R$ {val_floor - val_floor_sem_modelo:+,.0f}"
+      f"  -> o piso é conservador mesmo com o modelo")
 
 fig, ax = plt.subplots(figsize=(7.5, 3.6))
 vals = [val_all/1e6, val_floor/1e6, val_ceil/1e6]
-ax.bar(['Enviar a todos\\n(mix atual)', 'Política — piso\\n(model-free)',
-        'Política — teto\\n(model-based, validar A/B)'],
+ax.bar(['Enviar a todos\\n(mix atual)', 'Política — piso\\n(ganho medido)',
+        'Política — teto\\n(depende do modelo, validar A/B)'],
        vals, color=['#9E9E9E', IFOOD_RED, '#F8B4BB'])
 for i, v in enumerate(vals):
     ax.text(i, v, f'R$ {v:.1f}M', ha='center', va='bottom')
@@ -534,10 +554,15 @@ md("""## Conclusões
    compraria de qualquer forma. Para informational não há alvo de resposta
    confiável; seu efeito é medido só pelo gasto contra o controle.
 3. A **política** (melhor oferta por cliente; "nenhuma" quando CATE ≤ 0) tem ganho
-   apresentado como **range**: piso model-free (realocação de mix por tipo) e teto
-   model-based (personalização total, sujeito a winner's curse) — com o ranking
-   validado *model-free* por faixas de score nas ondas de teste (uplift realizado
-   monotônico do topo à base).
+   apresentado como **intervalo**:
+   - **piso** — vem de uma diferença *medida* (desconto rende mais que bogo); o
+     modelo entra só para cortar os ~5% de CATE ≤ 0, o que **reduz** a projeção;
+   - **teto** — depende inteiramente do modelo acertar a melhor oferta por cliente,
+     e está sujeito à maldição do vencedor.
+
+   O ranking **entre clientes** está validado sem depender do modelo (uplift
+   realizado decrescente do topo à base). A **troca de oferta** não está — cada
+   cliente só recebeu uma oferta, então testá-la exige A/B.
 
 ### Limitações e próximos passos
 - Envio ~aleatorizado é premissa (balance check favorável); validação definitiva =

@@ -140,8 +140,9 @@ for i, (titulo, txt) in enumerate([
     add_text(s, 7.2, y + 0.35, 5.9, 0.9, txt, 13, DARK)
 
 add_text(s, 0.6, 6.35, 6.4, 1.0,
-         "Por 1 milhão de envios: de R$ 10,3M para R$ 12,3M.\n"
-         "Há potencial maior com personalização total — número de modelo,\na confirmar em teste A/B.", 12, GREY)
+         "Por 1 milhão de envios: de R$ 10,3M para R$ 12,3M — ganho baseado numa\n"
+         "diferença já medida (desconto rende mais que BOGO). O potencial maior depende\n"
+         "de o modelo acertar a oferta de cada pessoa, e por isso precisa de teste A/B.", 12, GREY)
 add_text(s, 7.2, 6.5, 5.9, 0.6, "Próximo passo: teste A/B com grupo de controle.", 14, DARK, bold=True)
 
 prs.save(str(OUT))

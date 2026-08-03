@@ -10,6 +10,7 @@ data/processed/*
 CLAUDE.md
 GUIA_DE_ESTUDO.md
 DISCURSO_APRESENTACAO.md
+ROTEIRO_DOS_NOTEBOOKS.md
 .claude/
 
 # Python

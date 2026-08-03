@@ -265,10 +265,21 @@ aggs += [F.sum(F.when(F.col("t_tx") <= F.col("t_end"), F.col("amount")).otherwis
 outcomes = tx_out.groupBy("account_id", "wave").agg(*aggs)
 print("linhas com alguma transação no horizonte:", outcomes.count())""")
 
-md("""## Features estritamente pré-onda (`t < onda`)
-RFM transacional + histórico de ofertas do cliente **antes** do envio. Onda 0 não
-tem histórico → `has_history = 0` (mantida com flag; descartá-la custaria 1/6 dos
-tratados e o controle mais limpo).""")
+md("""## Variáveis de previsão: só o que se sabia antes do envio (`t < onda`)
+Histórico de compras e de ofertas do cliente **anteriores** ao envio.
+
+⚠️ **Essa regra vale só para as variáveis de previsão, não para a tabela inteira.**
+Os resultados (calculados na seção anterior — gasto nos dias seguintes, se viu e
+usou) são necessariamente **posteriores** ao envio; sem eles não haveria o que medir.
+
+A separação existe porque, no momento real da decisão, a empresa só conhece o
+passado do cliente. Se o modelo escolhesse a quem enviar usando informação
+posterior, teria um desempenho ótimo no papel e falharia em produção, onde essa
+informação ainda não existe.
+
+Quem foi contemplado no primeiro lote não tem histórico anterior → `has_history = 0`
+(mantido com a marcação; descartar custaria 1/6 dos tratados e o grupo de comparação
+mais limpo de todos).""")
 co("""tx_pre = (grid.select("account_id", "wave").join(trans, "account_id")
               .filter(F.col("t_tx") < F.col("wave")))
 rfm = tx_pre.groupBy("account_id", "wave").agg(

@@ -868,9 +868,17 @@ md("""# Conclusões da EDA (dados brutos)
    sido sorteados**, o que torna a comparação confiável.
 
 → **Próximo passo:** o `1_data_processing.ipynb` organiza tudo isso numa tabela com
-uma linha por cliente e por lote, usando apenas informações **anteriores** a cada
-envio. Com ela, o `2_modeling.ipynb` consegue finalmente medir quanto de venda cada
-envio realmente gerou.
+uma linha por cliente e por lote. Cada linha guarda **dois momentos**:
+
+- **o que se sabia antes do envio** (gasto anterior, nº de compras, perfil) — são as
+  pistas usadas para decidir a quem enviar;
+- **o que aconteceu depois** (quanto o cliente gastou nos dias seguintes, se viu e
+  usou a oferta) — é o resultado que queremos medir.
+
+Essa separação é o que impede a "trapaça": na hora de decidir um envio, a empresa só
+conhece o passado do cliente. Se o modelo usasse informação posterior ao envio para
+escolher, pareceria ótimo no papel e falharia na prática. Com essa tabela, o
+`2_modeling.ipynb` consegue medir quanto de venda cada envio realmente gerou.
 """)
 
 nb["cells"] = c

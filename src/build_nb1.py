@@ -62,6 +62,10 @@ else:
     # Windows/local: aponta os workers Python do Spark para o interpretador atual
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
     os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+    # Com Docker Desktop instalado, o hostname da máquina resolve para
+    # "host.docker.internal" e os workers Python não conseguem conectar de volta
+    # ("Python worker failed to connect back"). Fixar o loopback resolve.
+    os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
     # Heap do driver precisa ser definido ANTES da JVM subir (config no builder é
     # ignorada). Ajustado à memória livre da máquina: pedir mais do que o sistema
     # tem disponível faz a JVM morrer no meio do job.
@@ -74,6 +78,8 @@ else:
     os.environ.setdefault("PYSPARK_SUBMIT_ARGS", f"--driver-memory {heap} pyspark-shell")
     spark = (SparkSession.builder.master("local[*]").appName("ifood-nb1")
              .config("spark.sql.shuffle.partitions", "8")
+             .config("spark.driver.bindAddress", "127.0.0.1")
+             .config("spark.driver.host", "127.0.0.1")
              .config("spark.ui.enabled", "false").getOrCreate())
     # sparkContext não existe no serverless (Spark Connect) — só em modo local
     spark.sparkContext.setLogLevel("ERROR")

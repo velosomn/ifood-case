@@ -161,7 +161,8 @@ rows = []
 for w in sorted(df.wave.unique()):
     dw = df[df.wave == w]
     ctrl = dw[dw.control_clean == 1]['y_net_h7'].values
-    linha = {'onda': int(w), 'n_controle': len(ctrl)}
+    linha = {'onda': int(w), 'n_controle': len(ctrl),
+             'gasto_controle': round(ctrl.mean(), 2)}
     for rotulo, tr in [('qualquer', dw[dw.W == 1]),
                        ('isolado', dw[(dw.W == 1) & (dw.n_active_offers == 0)])]:
         t = tr['y_net_h7'].values
@@ -169,15 +170,22 @@ for w in sorted(df.wave.unique()):
             continue
         lo, hi = boot_ci(t, ctrl)
         linha[f'n_{rotulo}'] = len(t)
-        linha[f'ate_{rotulo}'] = round(t.mean() - ctrl.mean(), 2)
+        linha[f'gasto_{rotulo}'] = round(t.mean(), 2)
+        linha[f'efeito_{rotulo}'] = round(t.mean() - ctrl.mean(), 2)
         linha[f'ic_{rotulo}'] = f'{lo:.2f}–{hi:.2f}'
     rows.append(linha)
 
-ate = pd.DataFrame(rows)[['onda', 'n_controle', 'n_qualquer', 'ate_qualquer',
-                          'ic_qualquer', 'n_isolado', 'ate_isolado', 'ic_isolado']]
+ate = pd.DataFrame(rows)[['onda', 'n_controle', 'gasto_controle',
+                          'n_qualquer', 'gasto_qualquer', 'efeito_qualquer', 'ic_qualquer',
+                          'n_isolado', 'gasto_isolado', 'efeito_isolado', 'ic_isolado']]
+print("gasto = média de R$ por cliente em 7 dias, líquido do reward\\n")
 print(ate.to_string(index=False))
-print("\\nNota: na onda 0 as duas definições coincidem — era o primeiro envio do teste,")
-print("então ninguém tinha oferta anterior ativa (0 pessoas, verificável em n_active_offers).")""")
+print("\\nComo ler:")
+print("  • efeito = gasto do tratado − gasto do controle (ex.: onda 0: 21,02 − 11,19 = 9,82)")
+print("  • quem recebe oferta gasta ~59% mais que quem não recebe — a diferença é grande")
+print("  • já 'qualquer' vs 'isolado' quase não diferem: restringir aos que tinham só")
+print("    aquela oferta não muda o resultado, ou seja, a sobreposição não inflava o efeito")
+print("  • na onda 0 as duas definições coincidem: era o 1º envio, ninguém tinha oferta anterior")""")
 
 co("""# ATE agregado (pooled, ponderado por onda) e por tipo de oferta
 pool_t = df[(df.W == 1) & (df.n_active_offers == 0)]

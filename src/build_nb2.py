@@ -138,9 +138,19 @@ X_OFFER = ['min_value', 'discount_value', 'duration', 'n_channels',
 print(len(X_CUST), 'features de cliente |', len(X_OFFER), 'de oferta')""")
 
 md("""## B · Efeito causal do envio (ATE)
-Diferença de médias tratado × **controle limpo**, por onda, no gasto de 7 dias
-líquido do reward. Dois recortes de tratados: todos e "limpos" (sem oferta anterior
-ativa — contraste simétrico). IC 95% por bootstrap.""")
+Diferença de médias entre quem **recebeu** e o **controle limpo**, em cada onda, no
+gasto de 7 dias líquido do reward. IC 95% por bootstrap.
+
+O efeito é calculado com **duas definições de "recebeu"**, sempre contra o **mesmo**
+grupo de controle:
+
+| Definição | Quem entra |
+|---|---|
+| **qualquer envio** | todos que receberam oferta na onda |
+| **envio isolado** | só quem recebeu **e não tinha outra oferta ainda ativa** |
+
+A segunda responde à crítica de que o efeito medido poderia ser de várias ofertas
+somadas. Comparar as duas colunas mostra o quanto isso pesa.""")
 co("""def boot_ci(a, b, n=2000, seed=0):
     r = np.random.RandomState(seed)
     diffs = [a[r.randint(0, len(a), len(a))].mean() - b[r.randint(0, len(b), len(b))].mean()
@@ -151,16 +161,23 @@ rows = []
 for w in sorted(df.wave.unique()):
     dw = df[df.wave == w]
     ctrl = dw[dw.control_clean == 1]['y_net_h7'].values
-    for scope, tr in [('todos', dw[dw.W == 1]),
-                      ('limpo', dw[(dw.W == 1) & (dw.n_active_offers == 0)])]:
+    linha = {'onda': int(w), 'n_controle': len(ctrl)}
+    for rotulo, tr in [('qualquer', dw[dw.W == 1]),
+                       ('isolado', dw[(dw.W == 1) & (dw.n_active_offers == 0)])]:
         t = tr['y_net_h7'].values
         if len(t) < 50 or len(ctrl) < 50:
             continue
         lo, hi = boot_ci(t, ctrl)
-        rows.append({'onda': int(w), 'tratados': scope, 'n_t': len(t), 'n_c': len(ctrl),
-                     'ate_liq_7d': t.mean() - ctrl.mean(), 'ic_lo': lo, 'ic_hi': hi})
-ate = pd.DataFrame(rows)
-print(ate.round(2).to_string(index=False))""")
+        linha[f'n_{rotulo}'] = len(t)
+        linha[f'ate_{rotulo}'] = round(t.mean() - ctrl.mean(), 2)
+        linha[f'ic_{rotulo}'] = f'{lo:.2f}–{hi:.2f}'
+    rows.append(linha)
+
+ate = pd.DataFrame(rows)[['onda', 'n_controle', 'n_qualquer', 'ate_qualquer',
+                          'ic_qualquer', 'n_isolado', 'ate_isolado', 'ic_isolado']]
+print(ate.to_string(index=False))
+print("\\nNota: na onda 0 as duas definições coincidem — era o primeiro envio do teste,")
+print("então ninguém tinha oferta anterior ativa (0 pessoas, verificável em n_active_offers).")""")
 
 co("""# ATE agregado (pooled, ponderado por onda) e por tipo de oferta
 pool_t = df[(df.W == 1) & (df.n_active_offers == 0)]

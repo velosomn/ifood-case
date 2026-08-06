@@ -251,9 +251,52 @@ lo_r, hi_r = boot_ci(pool_t['y_net_h7'].values, pool_c['y_net_h7'].values)
 lo_cl, hi_cl = cluster_ci(pool_t, pool_c)
 print(f"ATE pooled R$ {ate_pool:.2f} | IC linha-a-linha [{lo_r:.2f}, {hi_r:.2f}] "
       f"| IC clusterizado por cliente [{lo_cl:.2f}, {hi_cl:.2f}]")
+
+ics = {}
 for t in ['bogo', 'discount', 'informational']:
-    lo_t, hi_t = cluster_ci(pool_t[pool_t.offer_type == t], pool_c, seed=1)
-    print(f"  {t:13s}: IC clusterizado [{lo_t:.2f}, {hi_t:.2f}]")""")
+    ics[t] = cluster_ci(pool_t[pool_t.offer_type == t], pool_c, seed=1)
+
+# desenho dos intervalos: se não se sobrepõem, a ordenação entre tipos é sólida
+LAB = {'informational': 'informacional', 'bogo': 'BOGO', 'discount': 'desconto'}
+lo_min = min(v[0] for v in ics.values()); hi_max = max(v[1] for v in ics.values())
+ini, fim = int(np.floor(lo_min)) - 1, int(np.ceil(hi_max)) + 1
+LARG = 52
+pos = lambda v: int((v - ini) / (fim - ini) * LARG)
+
+print("\\nintervalos de confiança 95% por tipo de oferta (R$/cliente):\\n")
+for t in sorted(ics, key=lambda k: ics[k][0]):
+    lo, hi = ics[t]
+    linha = [' '] * (LARG + 1)
+    for i in range(pos(lo), pos(hi) + 1):
+        linha[i] = '─'
+    linha[pos(lo)] = '├'; linha[pos(hi)] = '┤'
+    print(f"  {LAB[t]:13s} {''.join(linha)}  {lo:5.2f} – {hi:5.2f}")
+eixo = [' '] * (LARG + 1)
+for v in range(ini, fim + 1, 2):
+    if 0 <= pos(v) <= LARG:
+        eixo[pos(v)] = '┴'
+print(f"  {'':13s} {''.join(eixo)}")
+rot = [' '] * (LARG + 6)
+for v in range(ini, fim + 1, 2):
+    p = pos(v)
+    if 0 <= p <= LARG:
+        for j, ch in enumerate(str(v)):
+            rot[p + j] = ch
+print(f"  {'':13s} {''.join(rot)}")
+
+ordenado = sorted(ics.items(), key=lambda kv: kv[1][0])
+sobrepoe = any(ordenado[i][1][1] > ordenado[i + 1][1][0] for i in range(len(ordenado) - 1))
+print(f"\\nalgum par de intervalos se sobrepõe? {'SIM' if sobrepoe else 'NÃO'}"
+      f" -> ordenação entre tipos é {'inconclusiva' if sobrepoe else 'sólida'}")""")
+
+md("""**Leitura:** os três intervalos são **completamente separados**. O pior cenário
+do desconto ainda supera o melhor cenário do BOGO, e o pior do BOGO supera o melhor
+do informacional.
+
+Isso é o que autoriza a decisão de negócio: a ordenação **desconto > BOGO >
+informacional** é real, não variação de amostra. Se os intervalos se sobrepusessem,
+não daria para afirmar qual tipo rende mais — e o ganho do piso (+26%), que vem
+justamente de migrar o mix para desconto, ficaria sem base.""")
 
 md("""## C · Modelo de resposta — `P(viu & usou | enviei, cliente, oferta)`
 Treinado nos **tratados de bogo/discount** das ondas 0–14; avaliado nas ondas 17–24

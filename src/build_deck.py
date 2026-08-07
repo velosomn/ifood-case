@@ -43,23 +43,19 @@ plt.savefig(FIG / "10_funnel.png", bbox_inches="tight")
 plt.close(fig)
 
 # ------------------------------------------- figura de impacto (versão do deck)
-# O notebook 2 gera uma versão com 3 barras, incluindo o teto model-based
-# (~R$29M). Para a apresentação usamos só o que está medido nos dados: o cenário
-# atual e o piso conservador. O teto fica no notebook, para quem perguntar.
-fig, ax = plt.subplots(figsize=(6.6, 3.8))
-vals = [10.28, 12.32]
-barras = ax.bar(["Hoje\n(mix atual de ofertas)", "Com a política\n(melhor oferta por cliente)"],
-                vals, color=["#9E9E9E", "#EA1D2C"], width=0.55)
-for b, v in zip(barras, vals):
-    ax.text(b.get_x() + b.get_width() / 2, v + 0.25, f"R$ {v:.1f}M",
-            ha="center", fontsize=13, fontweight="bold")
-ax.annotate("", xy=(1, 12.32), xytext=(0, 10.28),
-            arrowprops=dict(arrowstyle="->", color="#2E7D32", lw=2))
-ax.text(0.5, 13.3, "+20%", ha="center", color="#2E7D32", fontsize=15, fontweight="bold")
-ax.set_ylabel("venda incremental (R$ milhões)")
-ax.set_title("Por 1 milhão de cupons enviados")
-ax.set_ylim(0, 15.5)
-ax.spines[["top", "right"]].set_visible(False)
+# Mesma figura de 3 barras do notebook 2 (09_business_impact.png): cenário
+# atual, piso conservador (ganho medido) e teto model-based, este último a
+# validar em A/B. As barras nomeiam piso e teto explicitamente, então não há
+# risco de ler o piso como "melhor oferta por cliente" (que é o teto).
+fig, ax = plt.subplots(figsize=(7.5, 3.6))
+vals = [10.28, 12.32, 29.42]
+ax.bar(["Enviar a todos\n(mix atual)", "Política — piso\n(ganho medido)",
+        "Política — teto\n(depende do modelo, validar A/B)"],
+       vals, color=["#9E9E9E", "#EA1D2C", "#F8B4BB"])
+for i, v in enumerate(vals):
+    ax.text(i, v, f"R$ {v:.1f}M", ha="center", va="bottom")
+ax.set_ylabel("valor líquido incremental (R$ M)")
+ax.set_title("Projeção por 1M de envios — política vs enviar a todos")
 plt.tight_layout()
 plt.savefig(FIG / "11_impacto_deck.png", bbox_inches="tight")
 plt.close(fig)

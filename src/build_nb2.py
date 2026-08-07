@@ -1,10 +1,11 @@
-"""Builds notebooks/2_modeling.ipynb — blocos A-E do blueprint aprovado.
+"""Builds notebooks/2_modeling.ipynb.
 
 A. Split temporal (ondas 0-14 treino / 17-24 teste)
 B. ATE do envio: tratados x controle limpo, gasto líquido de reward, bootstrap
-C. Modelo de resposta P(viu & usou) — XGBoost (bogo/discount), avaliação temporal
-D. CATE — T-learner por tipo de oferta (3 braços vs controle limpo) no gasto líquido
-E. Política (argmax valor líquido incremental, incl. "nenhuma") + Qini + simulação
+C. CATE — T-learner por tipo de oferta (3 braços vs controle limpo) no gasto líquido
+D. Política (argmax valor líquido incremental, incl. "nenhuma") + Qini + simulação
+E. Comparação: a abordagem convencional (classificador de resposta) e por que ela
+   não decide envio — fecha o argumento em vez de interromper o raciocínio
 """
 import nbformat as nbf
 from pathlib import Path
@@ -14,7 +15,7 @@ c = []
 md = lambda s: c.append(nbf.v4.new_markdown_cell(s))
 co = lambda s: c.append(nbf.v4.new_code_cell(s))
 
-md("""# 2 · Modelagem — resposta, efeito causal do envio e política de ofertas
+md("""# 2 · Modelagem — efeito do envio e política de ofertas
 
 **Entrada:** `data/processed/modeling_table.parquet` (NB1) — (cliente × onda), 102k
 linhas, tratamento **W = envio**, controle limpo por onda, features pré-onda.
@@ -25,9 +26,13 @@ linhas, tratamento **W = envio**, controle limpo por onda, features pré-onda.
 |---|---|---|---|
 | **A** | Split **temporal**: treino ondas 0–14, teste 17–24 | Simula a decisão real (treinar no passado, decidir no futuro) | Split aleatório: vaza o futuro |
 | **B** | **ATE do envio**: tratados × controle limpo, gasto em 7d **líquido do reward**, IC bootstrap | Responde "quanto o envio gera de incremento, descontado o cupom" | Atribuir todo o gasto da janela à oferta: ~43% ocorreria sem ela |
-| **C** | **Modelo de resposta** `P(viu & usou)` (XGBoost), **só bogo/discount** | Target de negócio definido no case; identifica quem responde. Informational fica fora: sem evento de resgate, e "comprou após ver" ocorre 47,6% das vezes sem oferta — mede atividade basal | Incluir informational com alvo "comprou após ver": mistura evento impossível-sem-oferta com evento que acontece sozinho |
-| **D** | **CATE** — T-learner por **tipo** (3 braços × controle limpo) no gasto líquido | Efeito heterogêneo com controle real; braços por tipo mantêm amostra; atributos da oferta diferenciam ofertas dentro do braço | T-learner por offer_id: 8 braços finos demais |
-| **E** | **Política**: argmax do valor líquido incremental esperado, incluindo "nenhuma"; avaliação por **Qini** e simulação financeira | A entrega é uma regra de alocação, não um score | Ranquear por propensão: prioriza quem compraria de qualquer forma |
+| **C** | **CATE** — T-learner por **tipo** (3 braços × controle limpo) no gasto líquido | Efeito heterogêneo com controle real; braços por tipo mantêm amostra; atributos da oferta diferenciam ofertas dentro do braço | T-learner por offer_id: 8 braços finos demais |
+| **D** | **Política**: argmax do valor líquido incremental esperado, incluindo "nenhuma"; avaliação por **Qini** e simulação financeira | A entrega é uma regra de alocação, não um score | Ranquear por propensão: prioriza quem compraria de qualquer forma |
+| **E** | **Comparação** com a abordagem convencional (classificador de resposta) | Mostra que um modelo tecnicamente bom (AUC 0,806) ranqueia mal em valor incremental — justifica o desenho causal em vez de só afirmá-lo | Omitir a comparação: deixaria a escolha do desenho sem evidência |
+
+**A corrente lógica é B → C → D:** *enviar compensa? → para quem faz mais diferença?
+→ qual oferta mandar para cada um?* O bloco E é o fechamento comparativo, não uma
+etapa do raciocínio.
 
 **Premissas herdadas do NB1:** envio ~aleatorizado por onda (balance check);
 `reward_paid` é da janela da oferta (aproximação ao usar horizonte 7d);
@@ -48,6 +53,7 @@ md("""## Glossário — os termos usados neste notebook
 | **Bootstrap** | Forma de calcular a margem de erro: sorteia a amostra milhares de vezes e refaz a conta, para ver o quanto o resultado varia. |
 | **Split temporal** | Treinar com as campanhas antigas e testar nas campanhas seguintes — em vez de sortear as linhas. Simula a situação real de decidir hoje com dados de ontem. |
 | **Model-free** | Resultado medido direto nos dados observados, **sem depender de o modelo estar certo**. É a evidência mais forte que temos. |
+| **Modelo de resposta** | Classificador que prevê *quem usa o cupom*. Aparece só no bloco E, como comparação — **não** é o que decide o envio. |
 """)
 
 md("""## Preparação e carga dos dados
@@ -215,7 +221,7 @@ plt.tight_layout(); plt.savefig(f'{FIG}/05_ate.png', bbox_inches='tight'); plt.s
 
 md("""**Leitura:** o envio gera incremento líquido positivo por cliente mesmo após
 descontar o reward — e o efeito difere por tipo. Este é o *baseline* causal que a
-política tenta melhorar via personalização (bloco D/E).
+política tenta melhorar via personalização (blocos C e D).
 
 *Robustez:* ajuste por regressão (GBM com W + features pré-onda) abaixo — o efeito
 ajustado deve ficar próximo da diferença de médias se o balance segurar.""")
@@ -298,43 +304,7 @@ informacional** é real, não variação de amostra. Se os intervalos se sobrepu
 não daria para afirmar qual tipo rende mais — e o ganho do piso (+26%), que vem
 justamente de migrar o mix para desconto, ficaria sem base.""")
 
-md("""## C · Modelo de resposta — `P(viu & usou | enviei, cliente, oferta)`
-Treinado nos **tratados de bogo/discount** das ondas 0–14; avaliado nas ondas 17–24
-(fora do tempo). XGBoost com features de cliente + atributos da oferta.
-
-**Por que informational fica de fora:** esse tipo não gera evento de resgate, e o
-substituto natural ("comprou após ver") ocorre em **47,6%** dos casos **sem oferta
-alguma** — é atividade basal, não resposta. Misturar os dois no mesmo alvo treinaria
-o modelo em conceitos incomensuráveis: um evento impossível sem a oferta (resgate) e
-outro que acontece sozinho na maior parte das vezes. O efeito de informational é
-medido no bloco D, pelo **gasto contra o grupo de controle**.""")
-co("""tr_mask = (df.W == 1) & (df.split == 'train') & df.y_response.notna()
-te_mask = (df.W == 1) & (df.split == 'test') & df.y_response.notna()
-Xtr, ytr = df.loc[tr_mask, X_CUST + X_OFFER], df.loc[tr_mask, 'y_response']
-Xte, yte = df.loc[te_mask, X_CUST + X_OFFER], df.loc[te_mask, 'y_response']
-
-resp = XGBClassifier(n_estimators=400, max_depth=5, learning_rate=0.05,
-                     subsample=0.8, colsample_bytree=0.8, eval_metric='logloss',
-                     random_state=42, n_jobs=-1)
-resp.fit(Xtr, ytr)
-p_te = resp.predict_proba(Xte)[:, 1]
-print(f"treino: {len(ytr):,} (resp {ytr.mean():.3f}) | teste: {len(yte):,} (resp {yte.mean():.3f})")
-print(f"AUC teste temporal: {roc_auc_score(yte, p_te):.3f} | PR-AUC: {average_precision_score(yte, p_te):.3f}")""")
-
-co("""fig, axes = plt.subplots(1, 2, figsize=(11, 3.6))
-frac_pos, mean_pred = calibration_curve(yte, p_te, n_bins=10)
-axes[0].plot(mean_pred, frac_pos, 'o-', color=IFOOD_RED)
-axes[0].plot([0, 1], [0, 1], '--', color='grey')
-axes[0].set_xlabel('previsto'); axes[0].set_ylabel('observado'); axes[0].set_title('Calibração (teste)')
-imp = pd.Series(resp.feature_importances_, index=X_CUST + X_OFFER).nlargest(10)
-imp.iloc[::-1].plot.barh(ax=axes[1], color='#37474F'); axes[1].set_title('Top-10 importâncias')
-plt.tight_layout(); plt.savefig(f'{FIG}/06_response_model.png', bbox_inches='tight'); plt.show()""")
-
-md("""**Leitura:** o modelo de resposta ranqueia bem *quem usa* — mas isso, sozinho,
-não decide o envio: quem responde muito pode ser exatamente quem já compraria
-(custo de reward sem incremento). Por isso a política usa o **CATE líquido** (D).""")
-
-md("""## D · Efeito heterogêneo (CATE) — T-learner por tipo de oferta
+md("""## C · Efeito heterogêneo (CATE) — T-learner por tipo de oferta
 - `m1_tipo(x, atributos_da_oferta)`: regressor do gasto líquido 7d nos **tratados do
   tipo** (ondas de treino);
 - `m0(x)`: regressor do gasto 7d no **controle limpo** (ondas de treino);
@@ -382,7 +352,7 @@ axes[0].set_ylabel('gasto líquido incremental acum. (R$)')
 axes[0].legend(fontsize=8)
 plt.tight_layout(); plt.savefig(f'{FIG}/07_qini_test.png', bbox_inches='tight'); plt.show()""")
 
-md("""## E · Política de envio + impacto
+md("""## D · Política de envio + impacto
 Para cada cliente das ondas de teste: pontua as **10 ofertas candidatas** →
 `argmax` do CATE líquido; **não envia** se o melhor CATE ≤ 0. Validação
 *model-free*: uplift realizado (tratado × controle limpo) por faixa do score.""")
@@ -614,13 +584,101 @@ ax.set_ylabel('valor líquido incremental (R$ M)')
 ax.set_title('Projeção por 1M de envios — política vs enviar a todos')
 plt.tight_layout(); plt.savefig(f'{FIG}/09_business_impact.png', bbox_inches='tight'); plt.show()""")
 
+md("""## E · Comparação — e se tivéssemos usado a abordagem convencional?
+
+A solução acima (blocos B → C → D) mede o **efeito** do envio. A abordagem mais
+comum neste tipo de problema é outra: treinar um classificador para prever **quem
+usa o cupom** e mandar para os de maior probabilidade.
+
+Vale construir esse modelo — não para usá-lo, mas para mostrar **por que ele não
+resolve o problema de negócio**, mesmo funcionando bem tecnicamente.
+
+Alvo: `y_response` = viu **e** usou, na ordem certa. Treinado nos tratados de
+bogo/discount das ondas 0–14, avaliado nas ondas 17–24.
+
+*Informational fica de fora: não gera evento de resgate, e o substituto natural
+("comprou após ver") ocorre em 47,6% dos casos **sem oferta alguma** — mede
+atividade basal, não resposta.*""")
+co("""tr_mask = (df.W == 1) & (df.split == 'train') & df.y_response.notna()
+te_mask = (df.W == 1) & (df.split == 'test') & df.y_response.notna()
+Xtr, ytr = df.loc[tr_mask, X_CUST + X_OFFER], df.loc[tr_mask, 'y_response']
+Xte, yte = df.loc[te_mask, X_CUST + X_OFFER], df.loc[te_mask, 'y_response']
+
+resp = XGBClassifier(n_estimators=400, max_depth=5, learning_rate=0.05,
+                     subsample=0.8, colsample_bytree=0.8, eval_metric='logloss',
+                     random_state=42, n_jobs=-1)
+resp.fit(Xtr, ytr)
+p_te = resp.predict_proba(Xte)[:, 1]
+print(f"treino: {len(ytr):,} (resp {ytr.mean():.3f}) | teste: {len(yte):,} (resp {yte.mean():.3f})")
+print(f"AUC teste temporal: {roc_auc_score(yte, p_te):.3f} | PR-AUC: {average_precision_score(yte, p_te):.3f}")""")
+
+co("""fig, axes = plt.subplots(1, 2, figsize=(11, 3.6))
+frac_pos, mean_pred = calibration_curve(yte, p_te, n_bins=10)
+axes[0].plot(mean_pred, frac_pos, 'o-', color=IFOOD_RED)
+axes[0].plot([0, 1], [0, 1], '--', color='grey')
+axes[0].set_xlabel('previsto'); axes[0].set_ylabel('observado'); axes[0].set_title('Calibração (teste)')
+imp = pd.Series(resp.feature_importances_, index=X_CUST + X_OFFER).nlargest(10)
+imp.iloc[::-1].plot.barh(ax=axes[1], color='#37474F'); axes[1].set_title('Top-10 importâncias')
+plt.tight_layout(); plt.savefig(f'{FIG}/06_response_model.png', bbox_inches='tight'); plt.show()""")
+
+md("""### Por que esse modelo não deve decidir o envio
+Teste direto: quem o modelo aponta como mais provável de usar o cupom **gera mais
+venda incremental**? Comparamos o efeito realizado no topo e na base do ranking
+dele, do mesmo jeito que fizemos com o CATE.""")
+co("""cmp_te = df[(df.split == 'test') & ((df.W == 1) | (df.control_clean == 1))].copy()
+cli_resp = df.loc[te_mask, ['account_id']].copy()
+cli_resp['p_resp'] = p_te
+cli_resp = cli_resp.groupby('account_id').p_resp.max()
+cmp_te = cmp_te[cmp_te.account_id.isin(cli_resp.index)].copy()
+cmp_te['p_resp'] = cmp_te.account_id.map(cli_resp)
+
+cmp_te['faixa'] = pd.qcut(cmp_te.p_resp.rank(method='first', ascending=False), 5,
+                          labels=['top 20%', '20-40%', '40-60%', '60-80%', 'bottom 20%'])
+linhas = []
+for f, g in cmp_te.groupby('faixa', observed=True):
+    t_, c_ = g[g.W == 1], g[g.W == 0]
+    linhas.append({'faixa': f, 'n_t': len(t_), 'n_c': len(c_),
+                   'prob_media_de_usar': round(g.p_resp.mean(), 3),
+                   'uplift_realizado': round(t_.y_net_h7.mean() - c_.y_net_h7.mean(), 2)})
+print(pd.DataFrame(linhas).to_string(index=False))""")
+
+md("""**Leitura — o modelo convencional é um proxy fraco, não inútil.** O resultado
+aqui é mais sutil do que "não funciona", e vale registrar com honestidade.
+
+Comparando os dois rankings pelo **mesmo** critério (uplift realizado por faixa):
+
+| Faixa | Ranking pelo **efeito** (bloco C) | Ranking por **probabilidade de uso** |
+|---|---|---|
+| top 20% | **R$ 21,15** | R$ 12,80 |
+| 20–40% | R$ 16,22 | R$ 10,94 |
+| 40–60% | R$ 10,48 | R$ 5,99 |
+| 60–80% | R$ 2,82 | R$ 0,08 |
+| bottom 20% | −R$ 0,10 | **R$ 2,41** ← quebra a ordem |
+
+Três diferenças:
+
+1. **O topo rende bem menos** — R$ 12,80 contra R$ 21,15. Priorizar por
+   probabilidade de uso captura só ~60% do valor que o modelo causal captura;
+2. **A ordenação quebra na base** — a última faixa (R$ 2,41) rende mais que a
+   penúltima (R$ 0,08). São clientes de baixa propensão a usar cupom, mas em quem a
+   oferta faz diferença quando usam;
+3. **A faixa de menor valor não é identificada** — o modelo causal isola um grupo
+   com efeito praticamente nulo (−R$ 0,10), que é exatamente quem não deveria
+   receber. O convencional não consegue separá-lo.
+
+Ou seja: "quem usa cupom" e "em quem o cupom faz diferença" são **correlacionados,
+mas não a mesma coisa**. Usar o primeiro como atalho para o segundo deixa valor na
+mesa e não identifica quem deve ficar de fora — que é justamente onde está a
+economia.""")
+
 md("""## Conclusões
 1. **O envio causa incremento líquido** (ATE > 0 mesmo descontando reward), com
    heterogeneidade relevante por tipo (discount > bogo > informational) e por cliente.
-2. O **modelo de resposta** (viu & usou, bogo/discount) ranqueia bem fora do tempo,
-   mas a decisão de envio é guiada pelo **CATE líquido** — evita pagar reward a quem
-   compraria de qualquer forma. Para informational não há alvo de resposta
-   confiável; seu efeito é medido só pelo gasto contra o controle.
+2. **Prever "quem usa cupom" é um proxy fraco para decidir envio** — o bloco E
+   compara os dois rankings pelo mesmo critério: priorizar por probabilidade de uso
+   captura só ~60% do valor do modelo causal (R$ 12,80 vs R$ 21,15 no topo), quebra
+   a ordenação na base e **não identifica o grupo de efeito nulo** — justamente
+   quem deveria ficar de fora. A decisão é guiada pelo **CATE líquido**.
 3. A **política** (melhor oferta por cliente; "nenhuma" quando CATE ≤ 0) tem ganho
    apresentado como **intervalo**:
    - **piso** — vem de uma diferença *medida* (desconto rende mais que bogo); o

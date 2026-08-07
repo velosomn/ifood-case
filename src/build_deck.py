@@ -42,6 +42,28 @@ plt.tight_layout()
 plt.savefig(FIG / "10_funnel.png", bbox_inches="tight")
 plt.close(fig)
 
+# ------------------------------------------- figura de impacto (versão do deck)
+# O notebook 2 gera uma versão com 3 barras, incluindo o teto model-based
+# (~R$29M). Para a apresentação usamos só o que está medido nos dados: o cenário
+# atual e o piso conservador. O teto fica no notebook, para quem perguntar.
+fig, ax = plt.subplots(figsize=(6.6, 3.8))
+vals = [10.28, 12.32]
+barras = ax.bar(["Hoje\n(mix atual de ofertas)", "Com a política\n(melhor oferta por cliente)"],
+                vals, color=["#9E9E9E", "#EA1D2C"], width=0.55)
+for b, v in zip(barras, vals):
+    ax.text(b.get_x() + b.get_width() / 2, v + 0.25, f"R$ {v:.1f}M",
+            ha="center", fontsize=13, fontweight="bold")
+ax.annotate("", xy=(1, 12.32), xytext=(0, 10.28),
+            arrowprops=dict(arrowstyle="->", color="#2E7D32", lw=2))
+ax.text(0.5, 13.3, "+20%", ha="center", color="#2E7D32", fontsize=15, fontweight="bold")
+ax.set_ylabel("venda incremental (R$ milhões)")
+ax.set_title("Por 1 milhão de cupons enviados")
+ax.set_ylim(0, 15.5)
+ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout()
+plt.savefig(FIG / "11_impacto_deck.png", bbox_inches="tight")
+plt.close(fig)
+
 # ------------------------------------------------------------------ helpers
 prs = Presentation()
 prs.slide_width = Inches(13.333)
@@ -124,7 +146,7 @@ add_text(s, 7.7, 6.2, 5.3, 0.7, "O maior ganho não é enviar menos —\né envi
 
 # ------------------------------------------- Slide 5 conclusão + impacto
 s = content_slide("A conclusão", "Com o mesmo orçamento, 20% mais resultado")
-s.shapes.add_picture(str(FIG / "09_business_impact.png"), Inches(0.5), Inches(1.9), width=Inches(6.4))
+s.shapes.add_picture(str(FIG / "11_impacto_deck.png"), Inches(0.5), Inches(1.9), width=Inches(6.4))
 
 add_text(s, 7.2, 1.85, 5.8, 0.6, "O que aprendemos", 17, DARK, bold=True)
 for i, (titulo, txt) in enumerate([
@@ -139,10 +161,9 @@ for i, (titulo, txt) in enumerate([
     add_text(s, 7.2, y, 5.9, 0.4, titulo, 14, RED, bold=True)
     add_text(s, 7.2, y + 0.35, 5.9, 0.9, txt, 13, DARK)
 
-add_text(s, 0.6, 6.35, 6.4, 1.0,
-         "Por 1 milhão de envios: de R$ 10,3M para R$ 12,3M — ganho baseado numa\n"
-         "diferença já medida (desconto rende mais que BOGO). O potencial maior depende\n"
-         "de o modelo acertar a oferta de cada pessoa, e por isso precisa de teste A/B.", 12, GREY)
+add_text(s, 0.6, 6.4, 6.4, 0.8,
+         "Por 1 milhão de envios: de R$ 10,3M para R$ 12,3M. O ganho vem de uma\n"
+         "diferença já medida nos dados — cupons de desconto rendem mais que BOGO.", 12, GREY)
 add_text(s, 7.2, 6.5, 5.9, 0.6, "Próximo passo: teste A/B com grupo de controle.", 14, DARK, bold=True)
 
 prs.save(str(OUT))

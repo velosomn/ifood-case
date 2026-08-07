@@ -53,7 +53,7 @@ por cliente. No último grupo, **zero**.
 
 ## Slide 5 — A conclusão: com o mesmo orçamento, 20% mais resultado
 
-![impacto](figures/09_business_impact.png)
+![impacto](figures/11_impacto_deck.png)
 
 ### O que aprendemos
 
@@ -67,8 +67,7 @@ dá para saber o que a oferta realmente causou.
 **3. O dinheiro está em acertar o alvo.**
 Não em cortar envios: 90% recebem a oferta errada, e corrigir isso rende +20%.
 
-*Por 1 milhão de envios: de R$ 10,3M para R$ 12,3M — ganho baseado numa diferença
-já medida (cupons de desconto rendem mais que BOGO). O potencial maior depende de o
-modelo acertar a oferta de cada pessoa, e por isso precisa de teste A/B.*
+*Por 1 milhão de envios: de R$ 10,3M para R$ 12,3M. O ganho vem de uma diferença já
+medida nos dados — cupons de desconto rendem mais que BOGO.*
 
 **Próximo passo:** teste A/B com grupo de controle.

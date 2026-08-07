@@ -1,10 +1,10 @@
 """Builds notebooks/2_modeling.ipynb.
 
-A. Split temporal (ondas 0-14 treino / 17-24 teste)
-B. ATE do envio: tratados x controle limpo, gasto líquido de reward, bootstrap
-C. CATE — T-learner por tipo de oferta (3 braços vs controle limpo) no gasto líquido
-D. Política (argmax valor líquido incremental, incl. "nenhuma") + Qini + simulação
-E. Comparação: a abordagem convencional (classificador de resposta) e por que ela
+Preparação: split temporal (ondas 0-14 treino / 17-24 teste) + features
+A. Enviar compensa?        ATE: tratados x controle limpo, gasto líquido de reward
+B. Para quem faz diferença? CATE via T-learner por tipo de oferta
+C. Qual oferta mandar?      política (argmax, incl. "nenhuma") + Qini + simulação
+D. Comparação: a abordagem convencional (classificador de resposta) e por que ela
    não decide envio — fecha o argumento em vez de interromper o raciocínio
 """
 import nbformat as nbf
@@ -22,17 +22,20 @@ linhas, tratamento **W = envio**, controle limpo por onda, features pré-onda.
 
 ## Estrutura (decisões e alternativas descartadas)
 
-| Bloco | O quê | Justificativa | Alternativa descartada |
+| Bloco | Pergunta que responde | Como | Alternativa descartada |
 |---|---|---|---|
-| **A** | Split **temporal**: treino ondas 0–14, teste 17–24 | Simula a decisão real (treinar no passado, decidir no futuro) | Split aleatório: vaza o futuro |
-| **B** | **ATE do envio**: tratados × controle limpo, gasto em 7d **líquido do reward**, IC bootstrap | Responde "quanto o envio gera de incremento, descontado o cupom" | Atribuir todo o gasto da janela à oferta: ~43% ocorreria sem ela |
-| **C** | **CATE** — T-learner por **tipo** (3 braços × controle limpo) no gasto líquido | Efeito heterogêneo com controle real; braços por tipo mantêm amostra; atributos da oferta diferenciam ofertas dentro do braço | T-learner por offer_id: 8 braços finos demais |
-| **D** | **Política**: argmax do valor líquido incremental esperado, incluindo "nenhuma"; avaliação por **Qini** e simulação financeira | A entrega é uma regra de alocação, não um score | Ranquear por propensão: prioriza quem compraria de qualquer forma |
-| **E** | **Comparação** com a abordagem convencional (classificador de resposta) | Mostra que um modelo tecnicamente bom (AUC 0,806) ranqueia mal em valor incremental — justifica o desenho causal em vez de só afirmá-lo | Omitir a comparação: deixaria a escolha do desenho sem evidência |
+| *Preparação* | — | Split **temporal** (treino ondas 0–14, teste 17–24) e preparo das variáveis | Split aleatório: misturaria passado e futuro |
+| **A** | **Enviar compensa?** | Compara tratados × controle limpo no gasto de 7d, líquido do cupom, com margem de erro | Atribuir todo o gasto da janela à oferta: ≈43% ocorreria sem ela |
+| **B** | **Para quem faz mais diferença?** | T-learner por tipo: um modelo do gasto com oferta, outro sem — a diferença é o efeito esperado | T-learner por oferta: 8 braços finos demais |
+| **C** | **Qual oferta mandar?** | Para cada cliente, a oferta de maior efeito — ou nenhuma. Avaliação por Qini e simulação financeira | Ranquear por propensão: prioriza quem compraria de qualquer forma |
+| **D** | *E se tivéssemos feito do jeito convencional?* | Treina o classificador de resposta e compara os dois rankings pelo mesmo critério | Omitir: deixaria a escolha do desenho sem evidência |
 
-**A corrente lógica é B → C → D:** *enviar compensa? → para quem faz mais diferença?
-→ qual oferta mandar para cada um?* O bloco E é o fechamento comparativo, não uma
-etapa do raciocínio.
+**A corrente lógica é A → B → C.** O bloco D é o fechamento comparativo, não uma
+etapa do raciocínio — por isso vem depois da conclusão prática.
+
+⚠️ O split é usado a partir do **bloco B** (onde há modelos a treinar). O bloco A
+usa **todas as 6 ondas**: como ele é uma subtração de médias, não há modelo para
+superajustar, e usar tudo dá mais precisão.
 
 **Premissas herdadas do NB1:** envio ~aleatorizado por onda (balance check);
 `reward_paid` é da janela da oferta (aproximação ao usar horizonte 7d);
@@ -53,10 +56,10 @@ md("""## Glossário — os termos usados neste notebook
 | **Bootstrap** | Forma de calcular a margem de erro: sorteia a amostra milhares de vezes e refaz a conta, para ver o quanto o resultado varia. |
 | **Split temporal** | Treinar com as campanhas antigas e testar nas campanhas seguintes — em vez de sortear as linhas. Simula a situação real de decidir hoje com dados de ontem. |
 | **Model-free** | Resultado medido direto nos dados observados, **sem depender de o modelo estar certo**. É a evidência mais forte que temos. |
-| **Modelo de resposta** | Classificador que prevê *quem usa o cupom*. Aparece só no bloco E, como comparação — **não** é o que decide o envio. |
+| **Modelo de resposta** | Classificador que prevê *quem usa o cupom*. Aparece só no bloco D, como comparação — **não** é o que decide o envio. |
 """)
 
-md("""## Preparação e carga dos dados
+md("""## Setup — de onde vêm os dados
 Assim como o notebook 1, este **roda tanto no computador quanto no Databricks sem
 alterações** — ele identifica o ambiente e busca os dados no lugar certo:
 
@@ -108,7 +111,12 @@ co('''def qini_curve(y_true, treatment, uplift):
     x = np.arange(1, n + 1) / n
     return np.concatenate([[0], x]), np.concatenate([[0], qini.values])''')
 
-md("""## A · Split temporal
+md("""## Preparação — split temporal e features
+
+*Esta seção não é uma etapa de análise: ela apenas separa treino/teste e prepara as
+variáveis. As análises são os blocos A a D.*
+
+### Split temporal
 Treino = ondas 0–14; teste = 17–24. O corte no dia 17 preserva ~metade das linhas
 em cada lado e deixa 2 ondas de teste com controle limpo razoável.""")
 co("""TRAIN_WAVES, TEST_WAVES = [0.0, 7.0, 14.0], [17.0, 21.0, 24.0]
@@ -143,9 +151,13 @@ X_OFFER = ['min_value', 'discount_value', 'duration', 'n_channels',
            'ch_web', 'ch_email', 'ch_mobile', 'ch_social']
 print(len(X_CUST), 'features de cliente |', len(X_OFFER), 'de oferta')""")
 
-md("""## B · Efeito causal do envio (ATE)
+md("""## A · Enviar compensa? — efeito causal do envio
 Diferença de médias entre quem **recebeu** e o **controle limpo**, em cada onda, no
 gasto de 7 dias líquido do reward. IC 95% por bootstrap.
+
+📌 **Este bloco usa todas as 6 ondas**, não o split. É uma subtração de médias, não
+um modelo treinado — logo não há nada que possa "decorar" os dados, e usar tudo dá
+mais precisão (46 mil tratados em vez de ~34 mil). O split começa a valer no bloco B.
 
 O efeito é calculado com **duas definições de "recebeu"**, sempre contra o **mesmo**
 grupo de controle:
@@ -256,7 +268,7 @@ ax.margins(y=0.18)
 plt.tight_layout(); plt.savefig(f'{FIG}/05_ate.png', bbox_inches='tight'); plt.show()""")
 
 md("""**Leitura:** o envio gera incremento líquido positivo mesmo depois de descontar
-o cupom — este é o *baseline* causal que a política tenta melhorar (blocos C e D).
+o cupom — este é o *baseline* causal que a política tenta melhorar (blocos B e C).
 
 Como os tipos estão **ordenados pelo efeito**, a separação aparece sozinha: as
 barras formam uma escada e os intervalos de erro não se tocam. Isso é o que autoriza
@@ -326,7 +338,7 @@ janelas de 5 dias ou mais**. Como 7 dias é a duração típica das ofertas, é 
 horizonte que representa o ciclo real — mas quem quiser otimizar resposta imediata
 (3 dias) chegaria a outra conclusão.""")
 
-md("""## C · Efeito heterogêneo (CATE) — T-learner por tipo de oferta
+md("""## B · Para quem faz mais diferença? — efeito por cliente (T-learner)
 - `m1_tipo(x, atributos_da_oferta)`: regressor do gasto líquido 7d nos **tratados do
   tipo** (ondas de treino);
 - `m0(x)`: regressor do gasto 7d no **controle limpo** (ondas de treino);
@@ -431,7 +443,7 @@ gasto bastaria nesta base. O T-learner se justifica porque a entrega é uma **re
 de decisão** (enviar / não enviar / qual oferta), e isso exige medir incremento, não
 nível.""")
 
-md("""## D · Política de envio + impacto
+md("""## C · Qual oferta mandar? — política de envio e impacto
 Para cada cliente das ondas de teste: pontua as **10 ofertas candidatas** →
 `argmax` do CATE líquido; **não envia** se o melhor CATE ≤ 0. Validação
 *model-free*: uplift realizado (tratado × controle limpo) por faixa do score.""")
@@ -560,7 +572,7 @@ oferta — nunca observamos como ele reagiria às outras nove.
 Por isso a realocação é estimada como um intervalo:
 
 - **Piso (conservador):** realocar o mix para o tipo de maior efeito **observado**
-  (discount). Usa só as diferenças medidas no bloco B — milhares de clientes
+  (discount). Usa só as diferenças medidas no bloco A — milhares de clientes
   receberam cada tipo, então a comparação é empírica, não extrapolação.
 - **Teto (dependente do modelo):** efeito previsto da melhor oferta vs o da oferta
   que foi de fato enviada. Sujeito à **maldição do vencedor**: escolher o `argmax`
@@ -663,9 +675,9 @@ ax.set_ylabel('valor líquido incremental (R$ M)')
 ax.set_title('Projeção por 1M de envios — política vs enviar a todos')
 plt.tight_layout(); plt.savefig(f'{FIG}/09_business_impact.png', bbox_inches='tight'); plt.show()""")
 
-md("""## E · Comparação — e se tivéssemos usado a abordagem convencional?
+md("""## D · Comparação — e se tivéssemos usado a abordagem convencional?
 
-A solução acima (blocos B → C → D) mede o **efeito** do envio. A abordagem mais
+A solução acima (blocos A → B → C) mede o **efeito** do envio. A abordagem mais
 comum neste tipo de problema é outra: treinar um classificador para prever **quem
 usa o cupom** e mandar para os de maior probabilidade.
 
@@ -726,7 +738,7 @@ aqui é mais sutil do que "não funciona", e vale registrar com honestidade.
 
 Comparando os dois rankings pelo **mesmo** critério (uplift realizado por faixa):
 
-| Faixa | Ranking pelo **efeito** (bloco C) | Ranking por **probabilidade de uso** |
+| Faixa | Ranking pelo **efeito** (bloco B) | Ranking por **probabilidade de uso** |
 |---|---|---|
 | top 20% | **R$ 21,15** | R$ 12,80 |
 | 20–40% | R$ 16,22 | R$ 10,94 |
@@ -753,7 +765,7 @@ economia.""")
 md("""## Conclusões
 1. **O envio causa incremento líquido** (ATE > 0 mesmo descontando reward), com
    heterogeneidade relevante por tipo (discount > bogo > informational) e por cliente.
-2. **Prever "quem usa cupom" é um proxy fraco para decidir envio** — o bloco E
+2. **Prever "quem usa cupom" é um proxy fraco para decidir envio** — o bloco D
    compara os dois rankings pelo mesmo critério: priorizar por probabilidade de uso
    captura só ~60% do valor do modelo causal (R$ 12,80 vs R$ 21,15 no topo), quebra
    a ordenação na base e **não identifica o grupo de efeito nulo** — justamente

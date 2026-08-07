@@ -374,6 +374,63 @@ axes[0].set_ylabel('gasto líquido incremental acum. (R$)')
 axes[0].legend(fontsize=8)
 plt.tight_layout(); plt.savefig(f'{FIG}/07_qini_test.png', bbox_inches='tight'); plt.show()""")
 
+md("""### Para que serve o `m0`? (teste da subtração)
+Pergunta legítima: o `m0` é treinado em só 11.650 linhas e é **subtraído de todo
+mundo**. Ele está agregando valor, ou só ruído?
+
+Teste direto: comparar o ranking por **CATE** (`m1 − m0`) com o ranking por **`m1`
+sozinho** — este último equivale a ordenar por *"quanto essa pessoa vai gastar"*, sem
+descontar o que ela gastaria sem oferta.""")
+co("""cust_t = df[df.split == 'test'].drop_duplicates('account_id')[['account_id'] + X_CUST]
+base_m0 = m0.predict(cust_t[X_CUST])
+sc_cate, sc_m1 = {}, {}
+for _, o in offers.iterrows():
+    G = cust_t.copy()
+    for col in X_OFFER:
+        G[col] = o[col]
+    p1 = m1[o['offer_type']].predict(G[X_CUST + X_OFFER])
+    sc_cate[o['offer_id']] = p1 - base_m0     # com m0
+    sc_m1[o['offer_id']] = p1                 # sem m0
+
+te_cmp = df[(df.split == 'test') & ((df.W == 1) | (df.control_clean == 1))].copy()
+linhas = []
+for nome, S in [('CATE (m1 - m0)', pd.DataFrame(sc_cate, index=cust_t.account_id)),
+                ('só m1 (sem subtrair)', pd.DataFrame(sc_m1, index=cust_t.account_id))]:
+    melhor = S.max(axis=1)
+    d = te_cmp.assign(s=te_cmp.account_id.map(melhor)).dropna(subset=['s'])
+    d['faixa'] = pd.qcut(d.s.rank(method='first', ascending=False), 5,
+                         labels=['top 20%', '20-40%', '40-60%', '60-80%', 'bottom 20%'])
+    linha = {'score': nome}
+    for f, g in d.groupby('faixa', observed=True):
+        linha[str(f)] = round(g[g.W == 1].y_net_h7.mean() - g[g.W == 0].y_net_h7.mean(), 2)
+    linha['% não enviar'] = f'{(melhor <= 0).mean():.1%}'
+    linhas.append(linha)
+print("uplift realizado por faixa do score (ondas de teste):\\n")
+print(pd.DataFrame(linhas).to_string(index=False))""")
+
+md("""**Leitura — o `m0` serve para decidir, não para ranquear.** O teste devolveu um
+resultado contraintuitivo que vale registrar:
+
+**1. No ranking puro, subtrair o `m0` não ajuda** — chega a piorar ligeiramente no
+topo. A razão é específica desta base: **quem gasta mais também responde mais**
+(vimos isso na sensibilidade por faixa de gasto — ganho de R$ 5,18 no quintil alto
+contra R$ 0,52 no baixo). Então "quanto a pessoa vai gastar" já é um bom substituto
+de "quanto ela vai gastar a mais". Somado a isso, o `m0` treina em poucas linhas e
+adiciona ruído.
+
+**2. Mas sem o `m0` a decisão de *não enviar* desaparece.** Repare na última coluna:
+o `m1` sozinho nunca corta ninguém. É estrutural — ele prevê **gasto**, que é sempre
+positivo, então o score jamais cruza zero. É impossível ele dizer "não vale a pena".
+
+Subtrair o `m0` é o que coloca o score em **unidade de incremento**, e é isso que
+torna o limiar zero interpretável. O corte de ~5% dos envios — que responde
+justamente à pergunta de desperdício do case — só existe por causa dessa subtração.
+
+**Conclusão honesta:** se o objetivo fosse apenas ordenar clientes, um modelo de
+gasto bastaria nesta base. O T-learner se justifica porque a entrega é uma **regra
+de decisão** (enviar / não enviar / qual oferta), e isso exige medir incremento, não
+nível.""")
+
 md("""## D · Política de envio + impacto
 Para cada cliente das ondas de teste: pontua as **10 ofertas candidatas** →
 `argmax` do CATE líquido; **não envia** se o melhor CATE ≤ 0. Validação

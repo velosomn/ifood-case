@@ -281,6 +281,51 @@ resid = adj['y_net_h7'] - m_adj.predict(adj[X_CUST])
 ate_adj = resid[adj.W == 1].mean() - resid[adj.W == 0].mean()
 print(f"ATE ajustado por regressão: R$ {ate_adj:.2f} (dif. de médias: R$ {ate_pool:.2f})")""")
 
+md("""### Por que medir em 7 dias? (teste de sensibilidade)
+A janela de 7 dias não é arbitrária: é a **duração mais comum** das ofertas (4 das
+10) e também a **mediana** — as durações são 3, 4, 5, 5, 7, 7, 7, 7, 10, 10. Uma
+janela curta demais corta vendas que a oferta ainda ia gerar; longa demais captura
+compras sem relação com ela, já expirada.
+
+Mas justificar não basta — o certo é testar se a conclusão depende dessa escolha.""")
+co("""# horizontes disponíveis, lidos da própria tabela (NB1 gerou 3,4,5,7,10 dias)
+HORIZONS = sorted(int(c.replace('spend_h', '')) for c in df.columns
+                  if c.startswith('spend_h'))
+sens_h = []
+for h in HORIZONS:
+    col = f'spend_h{h}'
+    yt = (pool_t[col] - pool_t['reward_paid']).mean()
+    yc = pool_c[col].mean()
+    linha = {'horizonte': f'{h}d', 'gasto_controle': round(yc, 2),
+             'gasto_tratado': round(yt, 2), 'efeito': round(yt - yc, 2),
+             '%_acima': f'{(yt/yc - 1)*100:.0f}%'}
+    ef = {}
+    for tp in ['bogo', 'discount', 'informational']:
+        s = pool_t[pool_t.offer_type == tp]
+        ef[tp] = (s[col] - s['reward_paid']).mean() - yc
+    linha['ordem_entre_tipos'] = ' > '.join(sorted(ef, key=ef.get, reverse=True))
+    sens_h.append(linha)
+print(pd.DataFrame(sens_h).to_string(index=False))""")
+
+md("""**Leitura:** o efeito é **positivo e substancial em qualquer janela** — a
+conclusão "enviar compensa" não depende dessa escolha.
+
+Dois pontos que o teste revela:
+
+1. **O efeito satura entre 7 e 10 dias** (R$ 9,21 → R$ 9,65, só +5%). Quase toda a
+   venda incremental acontece na primeira semana, então esticar a janela adicionaria
+   pouco sinal e muito ruído de compras não relacionadas.
+2. **A ordenação entre tipos se inverte em 3 dias**: ali informacional aparece na
+   frente. Faz sentido — as duas ofertas informacionais duram 3 e 4 dias, então numa
+   janela curta elas já se esgotaram enquanto as de desconto (7–10 dias) mal
+   começaram. A partir de 5 dias a ordem se estabiliza em *desconto > BOGO >
+   informacional*.
+
+O item 2 é a ressalva honesta: a recomendação de priorizar desconto **vale para
+janelas de 5 dias ou mais**. Como 7 dias é a duração típica das ofertas, é o
+horizonte que representa o ciclo real — mas quem quiser otimizar resposta imediata
+(3 dias) chegaria a outra conclusão.""")
+
 md("""## C · Efeito heterogêneo (CATE) — T-learner por tipo de oferta
 - `m1_tipo(x, atributos_da_oferta)`: regressor do gasto líquido 7d nos **tratados do
   tipo** (ondas de treino);
